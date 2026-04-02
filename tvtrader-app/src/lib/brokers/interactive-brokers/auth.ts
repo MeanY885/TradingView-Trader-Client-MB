@@ -1,136 +1,112 @@
 /**
  * interactive-brokers/auth.ts
  *
- * OAuth 2.0 authentication for the IB Web API using private_key_jwt.
- * Manages token lifecycle: generates JWT assertions, exchanges for access tokens,
- * and refreshes proactively before expiry.
+ * Session-based authentication for the IB Client Portal Gateway.
+ * The gateway handles auth via manual browser login (with 2FA).
+ * This module monitors session status and provides helpers for
+ * re-validation and re-authentication.
+ *
+ * No OAuth, no API keys — authentication is session-based via the gateway.
  */
 
-import * as crypto from 'crypto';
+import { BrokerAuthError } from '../errors';
+import { ibGatewayFetch } from './gateway-fetch';
 
-interface TokenInfo {
-  accessToken: string;
-  accessTokenSecret: string;
-  expiresAt: number; // ms timestamp
+export interface IBAuthStatus {
+  authenticated: boolean;
+  connected: boolean;
+  competing: boolean;
+  message?: string;
 }
-
-interface IBAuthConfig {
-  consumerKey: string;
-  privateKeyPem: string;
-  tokenUrl?: string;
-}
-
-const DEFAULT_TOKEN_URL = 'https://api.ibkr.com/v1/api/oauth/token';
 
 export class IBAuthManager {
-  private config: IBAuthConfig;
-  private tokenInfo: TokenInfo | null = null;
+  private gatewayUrl: string;
 
-  constructor(config: IBAuthConfig) {
-    this.config = config;
+  constructor(gatewayUrl: string) {
+    this.gatewayUrl = gatewayUrl;
   }
 
   /**
-   * Returns a valid access token, refreshing if needed.
+   * Checks the current authentication status of the gateway session.
+   * The user must have logged in via browser at the gateway URL.
    */
-  async getAccessToken(): Promise<{ accessToken: string; accessTokenSecret: string }> {
-    if (this.tokenInfo && Date.now() < this.tokenInfo.expiresAt) {
-      return {
-        accessToken: this.tokenInfo.accessToken,
-        accessTokenSecret: this.tokenInfo.accessTokenSecret,
-      };
-    }
-    return this.refreshToken();
-  }
-
-  /**
-   * Forces a token refresh. Used when a 401 is received.
-   */
-  async refreshToken(): Promise<{ accessToken: string; accessTokenSecret: string }> {
-    const assertion = this.buildJwtAssertion();
-    const tokenUrl = this.config.tokenUrl || DEFAULT_TOKEN_URL;
-
-    const body = new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
-      client_assertion: assertion,
-    });
-
-    const res = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    });
-
+  async getAuthStatus(): Promise<IBAuthStatus> {
+    const res = await this.gatewayFetch('/v1/api/iserver/auth/status', { method: 'POST' });
     if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`IB OAuth token request failed (${res.status}): ${text}`);
+      return { authenticated: false, connected: false, competing: false, message: `Gateway returned ${res.status}` };
     }
-
     const data = await res.json() as {
-      access_token: string;
-      access_token_secret: string;
-      expires_in?: number;
+      authenticated?: boolean;
+      connected?: boolean;
+      competing?: boolean;
+      message?: string;
     };
-
-    // Default expiry: 1 hour. Refresh at 80% of expiry time.
-    const expiresInMs = (data.expires_in || 3600) * 1000;
-    const refreshBuffer = expiresInMs * 0.2;
-
-    this.tokenInfo = {
-      accessToken: data.access_token,
-      accessTokenSecret: data.access_token_secret,
-      expiresAt: Date.now() + expiresInMs - refreshBuffer,
-    };
-
     return {
-      accessToken: this.tokenInfo.accessToken,
-      accessTokenSecret: this.tokenInfo.accessTokenSecret,
+      authenticated: data.authenticated ?? false,
+      connected: data.connected ?? false,
+      competing: data.competing ?? false,
+      message: data.message,
     };
   }
 
   /**
-   * Builds a signed JWT assertion for the private_key_jwt flow.
+   * Validates the SSO session. Call this if authenticated is false after login.
    */
-  private buildJwtAssertion(): string {
-    const tokenUrl = this.config.tokenUrl || DEFAULT_TOKEN_URL;
-    const now = Math.floor(Date.now() / 1000);
-
-    const header = {
-      alg: 'RS256',
-      typ: 'JWT',
-    };
-
-    const payload = {
-      iss: this.config.consumerKey,
-      sub: this.config.consumerKey,
-      aud: tokenUrl,
-      iat: now,
-      exp: now + 300, // 5 minutes
-      jti: crypto.randomUUID(),
-    };
-
-    const encodedHeader = base64url(JSON.stringify(header));
-    const encodedPayload = base64url(JSON.stringify(payload));
-    const signingInput = `${encodedHeader}.${encodedPayload}`;
-
-    const sign = crypto.createSign('RSA-SHA256');
-    sign.update(signingInput);
-    const signature = sign.sign(this.config.privateKeyPem);
-    const encodedSignature = base64url(signature);
-
-    return `${signingInput}.${encodedSignature}`;
+  async validateSso(): Promise<void> {
+    await this.gatewayFetch('/v1/api/sso/validate', { method: 'GET' });
   }
 
   /**
-   * Invalidates cached token, forcing re-auth on next call.
+   * Triggers re-authentication of the brokerage session.
    */
-  invalidate(): void {
-    this.tokenInfo = null;
+  async reauthenticate(): Promise<void> {
+    await this.gatewayFetch('/v1/api/iserver/reauthenticate', { method: 'POST' });
   }
-}
 
-function base64url(input: string | Buffer): string {
-  const buf = typeof input === 'string' ? Buffer.from(input) : input;
-  return buf.toString('base64url');
+  /**
+   * Ensures the gateway session is authenticated.
+   * Attempts SSO validation and re-auth if not authenticated.
+   * Throws BrokerAuthError if the session cannot be established.
+   */
+  async ensureAuthenticated(): Promise<void> {
+    let status = await this.getAuthStatus();
+    if (status.authenticated && status.connected) return;
+
+    // Try SSO validation first
+    await this.validateSso();
+    await this.sleep(2000);
+
+    status = await this.getAuthStatus();
+    if (status.authenticated && status.connected) return;
+
+    // Try re-authentication
+    await this.reauthenticate();
+    await this.sleep(5000);
+
+    status = await this.getAuthStatus();
+    if (status.authenticated && status.connected) return;
+
+    throw new BrokerAuthError(
+      'interactive_brokers',
+      `IB Gateway not authenticated. Please log in at ${this.gatewayUrl} via your browser. Status: ${JSON.stringify(status)}`,
+    );
+  }
+
+  private async gatewayFetch(path: string, init: RequestInit): Promise<Response> {
+    try {
+      return await ibGatewayFetch(`${this.gatewayUrl}${path}`, {
+        ...init,
+        headers: { 'Content-Type': 'application/json', ...init.headers },
+      });
+    } catch (e) {
+      throw new BrokerAuthError(
+        'interactive_brokers',
+        `Cannot reach IB Gateway at ${this.gatewayUrl}. Is it running? Error: ${e}`,
+      );
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
 }

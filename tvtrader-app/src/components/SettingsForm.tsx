@@ -29,13 +29,9 @@ interface Settings {
   live_account_id: string;
   hasPracticeKey: boolean;
   hasLiveKey: boolean;
-  // IB credentials
-  ib_practice_account_id?: string;
-  ib_live_account_id?: string;
-  hasIbPracticeKey?: boolean;
-  hasIbLiveKey?: boolean;
-  hasIbPracticePrivateKey?: boolean;
-  hasIbLivePrivateKey?: boolean;
+  // IB Client Portal Gateway
+  ib_gateway_url?: string;
+  ib_account_id?: string;
   account_currency?: string;
   webhook_domain?: string;
   [key: string]: string | boolean | undefined;
@@ -90,11 +86,10 @@ export default function SettingsForm() {
   const [liveKey, setLiveKey] = useState('');
   const [showPracticeKey, setShowPracticeKey] = useState(false);
   const [showLiveKey, setShowLiveKey] = useState(false);
-  // IB credentials
-  const [ibPracticeConsumerKey, setIbPracticeConsumerKey] = useState('');
-  const [ibLiveConsumerKey, setIbLiveConsumerKey] = useState('');
-  const [ibPracticePrivateKey, setIbPracticePrivateKey] = useState('');
-  const [ibLivePrivateKey, setIbLivePrivateKey] = useState('');
+  // IB gateway status
+  const [ibGatewayStatus, setIbGatewayStatus] = useState<{ authenticated: boolean; connected: boolean; competing?: boolean; message?: string } | null>(null);
+  const [ibStatusChecking, setIbStatusChecking] = useState(false);
+  const [ibShowLogin, setIbShowLogin] = useState(false);
   const [brokerMsg, setBrokerMsg] = useState('');
   const [balance, setBalance] = useState(0);
   const [balanceInputs, setBalanceInputs] = useState<Record<string, string>>({});
@@ -138,6 +133,17 @@ export default function SettingsForm() {
       }
     }).catch(() => {});
   }, []);
+
+  // Poll IB gateway status every 30s when IB is selected
+  useEffect(() => {
+    if ((settings?.broker || 'oanda') !== 'interactive_brokers') return;
+    const checkStatus = () => {
+      fetch('/api/ib-status').then((r) => r.json()).then(setIbGatewayStatus).catch(() => {});
+    };
+    checkStatus();
+    const interval = setInterval(checkStatus, 30000);
+    return () => clearInterval(interval);
+  }, [settings?.broker]);
 
   const save = async (data: Record<string, string>) => {
     setSaving(true);
@@ -201,19 +207,13 @@ export default function SettingsForm() {
       if (practiceKey.trim()) data.practice_api_key = practiceKey.trim();
       if (liveKey.trim()) data.live_api_key = liveKey.trim();
     } else if (broker === 'interactive_brokers') {
-      data.ib_practice_account_id = settings.ib_practice_account_id || '';
-      data.ib_live_account_id = settings.ib_live_account_id || '';
-      if (ibPracticeConsumerKey.trim()) data.ib_practice_consumer_key = ibPracticeConsumerKey.trim();
-      if (ibLiveConsumerKey.trim()) data.ib_live_consumer_key = ibLiveConsumerKey.trim();
-      if (ibPracticePrivateKey.trim()) data.ib_practice_private_key = ibPracticePrivateKey.trim();
-      if (ibLivePrivateKey.trim()) data.ib_live_private_key = ibLivePrivateKey.trim();
+      data.ib_gateway_url = settings.ib_gateway_url || 'https://localhost:5000';
+      data.ib_account_id = settings.ib_account_id || '';
     }
 
     const result = await save(data);
     if (result.ok) {
       setPracticeKey(''); setLiveKey('');
-      setIbPracticeConsumerKey(''); setIbLiveConsumerKey('');
-      setIbPracticePrivateKey(''); setIbLivePrivateKey('');
     }
     setApiMsg(result.ok ? 'Saved' : (result.error || 'Error'));
     setTimeout(() => setApiMsg(''), 2000);
@@ -358,7 +358,7 @@ export default function SettingsForm() {
         <p className="text-xs text-muted mb-5">
           {(settings.broker || 'oanda') === 'oanda'
             ? 'Enter your OANDA API keys and account IDs.'
-            : 'Enter your Interactive Brokers Web API consumer keys, signing keys, and account IDs.'}
+            : 'Configure the IB Client Portal Gateway URL and account ID. The gateway must be running and you must log in via browser.'}
         </p>
 
         {(settings.broker || 'oanda') === 'oanda' ? (
@@ -415,66 +415,113 @@ export default function SettingsForm() {
             </div>
           </div>
         ) : (
-          <div className="space-y-4 max-w-md">
-            <div>
-              <label className="block text-xs text-muted mb-1">Practice Account ID</label>
+          <div className="space-y-4">
+            {/* Session Status Banner */}
+            <div className={`flex items-center gap-3 px-4 py-3 rounded-lg border ${
+              ibGatewayStatus?.authenticated
+                ? 'bg-green/10 border-green/30'
+                : ibGatewayStatus === null
+                  ? 'bg-card border-card-border'
+                  : 'bg-red/10 border-red/30'
+            }`}>
+              <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                ibGatewayStatus?.authenticated ? 'bg-green animate-pulse' : ibGatewayStatus === null ? 'bg-muted' : 'bg-red'
+              }`} />
+              <div className="flex-1 min-w-0">
+                <span className={`text-sm font-medium ${ibGatewayStatus?.authenticated ? 'text-green' : ibGatewayStatus === null ? 'text-muted' : 'text-red'}`}>
+                  {ibGatewayStatus === null
+                    ? 'Checking gateway...'
+                    : ibGatewayStatus.authenticated
+                      ? 'Gateway Authenticated'
+                      : 'Gateway Not Authenticated'}
+                </span>
+                {ibGatewayStatus && !ibGatewayStatus.authenticated && (
+                  <p className="text-xs text-muted mt-0.5">
+                    {ibGatewayStatus.message || 'Login required. Click "Log In to Gateway" below.'}
+                  </p>
+                )}
+                {ibGatewayStatus?.competing && (
+                  <p className="text-xs text-yellow mt-0.5">Another session is competing for this username.</p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIbStatusChecking(true);
+                  fetch('/api/ib-status').then((r) => r.json()).then(setIbGatewayStatus).catch(() =>
+                    setIbGatewayStatus({ authenticated: false, connected: false, message: 'Cannot reach app server' })
+                  ).finally(() => setIbStatusChecking(false));
+                }}
+                disabled={ibStatusChecking}
+                className="px-3 py-1 bg-background border border-card-border rounded text-xs hover:border-accent transition-colors disabled:opacity-50 shrink-0"
+              >
+                {ibStatusChecking ? '...' : 'Refresh'}
+              </button>
+            </div>
+
+            {/* Account ID */}
+            <div className="max-w-md">
+              <label className="block text-xs text-muted mb-1">Account ID</label>
               <input
                 type="text"
-                value={settings.ib_practice_account_id || ''}
-                onChange={(e) => setSettings({ ...settings, ib_practice_account_id: e.target.value })}
+                value={settings.ib_account_id || ''}
+                onChange={(e) => setSettings({ ...settings, ib_account_id: e.target.value })}
                 className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-                placeholder="e.g. DU1234567"
+                placeholder="e.g. DUP652326"
               />
+              <p className="text-xs text-muted mt-1">Your IB account ID. For paper trading, use your paper account ID.</p>
             </div>
-            <div>
-              <label className="block text-xs text-muted mb-1">Practice Consumer Key {settings.hasIbPracticeKey && <span className="text-green ml-1">✓ Set</span>}</label>
-              <input
-                type="password"
-                value={ibPracticeConsumerKey}
-                onChange={(e) => setIbPracticeConsumerKey(e.target.value)}
-                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-                placeholder={settings.hasIbPracticeKey ? '••••••••' : 'Paste consumer key'}
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-muted mb-1">Practice Signing Key (PEM) {settings.hasIbPracticePrivateKey && <span className="text-green ml-1">✓ Set</span>}</label>
-              <textarea
-                value={ibPracticePrivateKey}
-                onChange={(e) => setIbPracticePrivateKey(e.target.value)}
-                rows={3}
-                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent resize-y"
-                placeholder={settings.hasIbPracticePrivateKey ? '••••••••' : 'Paste PEM private key'}
-              />
-            </div>
+
+            {/* Gateway URL (collapsed by default) */}
+            <details className="max-w-md">
+              <summary className="text-xs text-muted cursor-pointer hover:text-foreground transition-colors">Advanced: Gateway URL</summary>
+              <div className="mt-2">
+                <input
+                  type="text"
+                  value={settings.ib_gateway_url || 'https://localhost:5000'}
+                  onChange={(e) => setSettings({ ...settings, ib_gateway_url: e.target.value })}
+                  className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
+                  placeholder="https://localhost:5000"
+                />
+                <p className="text-xs text-muted mt-1">Default: https://ib-gateway:5000 in Docker. Only change if you run the gateway elsewhere.</p>
+              </div>
+            </details>
+
+            {/* Gateway Login */}
             <div className="border-t border-card-border pt-4">
-              <label className="block text-xs text-muted mb-1">Live Account ID</label>
-              <input
-                type="text"
-                value={settings.ib_live_account_id || ''}
-                onChange={(e) => setSettings({ ...settings, ib_live_account_id: e.target.value })}
-                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-                placeholder="e.g. U1234567"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-muted mb-1">Live Consumer Key {settings.hasIbLiveKey && <span className="text-green ml-1">✓ Set</span>}</label>
-              <input
-                type="password"
-                value={ibLiveConsumerKey}
-                onChange={(e) => setIbLiveConsumerKey(e.target.value)}
-                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-                placeholder={settings.hasIbLiveKey ? '••••••••' : 'Paste consumer key'}
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-muted mb-1">Live Signing Key (PEM) {settings.hasIbLivePrivateKey && <span className="text-green ml-1">✓ Set</span>}</label>
-              <textarea
-                value={ibLivePrivateKey}
-                onChange={(e) => setIbLivePrivateKey(e.target.value)}
-                rows={3}
-                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent resize-y"
-                placeholder={settings.hasIbLivePrivateKey ? '••••••••' : 'Paste PEM private key'}
-              />
+              <div className="flex items-center justify-between mb-3">
+                <label className="block text-xs text-muted uppercase tracking-wider">Gateway Login</label>
+                <button
+                  type="button"
+                  onClick={() => setIbShowLogin(!ibShowLogin)}
+                  className={`px-4 py-1.5 text-xs font-semibold rounded transition-colors ${
+                    ibShowLogin
+                      ? 'bg-card-border text-foreground hover:bg-card-border/80'
+                      : ibGatewayStatus?.authenticated
+                        ? 'bg-background border border-card-border text-muted hover:border-accent'
+                        : 'bg-accent text-background hover:bg-accent/90'
+                  }`}
+                >
+                  {ibShowLogin ? 'Hide Login' : ibGatewayStatus?.authenticated ? 'Re-authenticate' : 'Log In to Gateway'}
+                </button>
+              </div>
+              {ibShowLogin && (
+                <div className="rounded-lg border border-card-border overflow-hidden" style={{ height: '520px' }}>
+                  <iframe
+                    src="/api/ib-gateway"
+                    className="w-full h-full bg-white"
+                    title="IB Gateway Login"
+                    sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                  />
+                </div>
+              )}
+              {!ibShowLogin && (
+                <p className="text-xs text-muted">
+                  {ibGatewayStatus?.authenticated
+                    ? 'Session is active. It will be kept alive automatically. IB requires re-login approximately once per day during scheduled maintenance.'
+                    : 'Click the button above to open the IB login form. You will need your IB username, password, and 2FA device.'}
+                </p>
+              )}
             </div>
           </div>
         )}

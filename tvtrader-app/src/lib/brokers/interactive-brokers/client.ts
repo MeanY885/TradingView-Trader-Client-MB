@@ -1,17 +1,20 @@
 /**
  * interactive-brokers/client.ts
  *
- * Low-level HTTP client for the IB Web API.
- * Handles request signing, error handling, and response parsing.
+ * Low-level HTTP client for the IB Client Portal Gateway REST API.
+ * Uses session-based auth (no Bearer tokens) — the gateway manages
+ * authentication via manual browser login.
+ *
+ * The gateway uses a self-signed SSL certificate, so we disable
+ * TLS verification for requests to it.
  */
 
-import { IBAuthManager } from './auth';
 import { BrokerError, BrokerAuthError, BrokerConnectionError } from '../errors';
+import { ibGatewayFetch } from './gateway-fetch';
 
 export interface IBClientConfig {
-  baseUrl: string;
+  gatewayUrl: string;  // e.g. https://localhost:5000 or https://ib-gateway:5000
   accountId: string;
-  authManager: IBAuthManager;
 }
 
 export class IBClient {
@@ -25,63 +28,92 @@ export class IBClient {
     return this.config.accountId;
   }
 
-  async getAuthHeaders(): Promise<Record<string, string>> {
-    const { accessToken } = await this.config.authManager.getAccessToken();
-    return {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    };
+  get gatewayUrl(): string {
+    return this.config.gatewayUrl;
   }
 
   private async request<T>(
     path: string,
     options: RequestInit = {},
-    retryOnAuth = true,
   ): Promise<T> {
-    const headers = await this.getAuthHeaders();
-    const url = `${this.config.baseUrl}${path}`;
-
+    const url = `${this.config.gatewayUrl}${path}`;
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await ibGatewayFetch(url, {
         ...options,
-        headers: { ...headers, ...options.headers },
+        headers: {
+          'Content-Type': 'application/json',
+          ...options.headers,
+        },
       });
     } catch (e) {
-      throw new BrokerConnectionError('interactive_brokers', `Network error: ${e}`, e);
-    }
-
-    if (res.status === 401 && retryOnAuth) {
-      // Token expired or session killed — try refreshing once
-      console.warn('[IB-CLIENT] 401 received — attempting token refresh');
-      this.config.authManager.invalidate();
-      return this.request(path, options, false);
+      throw new BrokerConnectionError(
+        'interactive_brokers',
+        `Cannot reach IB Gateway at ${this.config.gatewayUrl}: ${e}`,
+        e,
+      );
     }
 
     if (res.status === 401) {
-      throw new BrokerAuthError('interactive_brokers', 'Authentication failed after token refresh');
+      throw new BrokerAuthError(
+        'interactive_brokers',
+        'IB Gateway session expired. Please log in again at the gateway URL.',
+      );
     }
 
     if (!res.ok) {
       const text = await res.text();
       throw new BrokerError(
-        `IB API error ${res.status}: ${text}`,
+        `IB Gateway error ${res.status}: ${text}`,
         'interactive_brokers',
         `HTTP_${res.status}`,
         res.status >= 500,
       );
     }
 
-    return res.json() as Promise<T>;
+    const text = await res.text();
+    if (!text) return {} as T;
+    return JSON.parse(text) as T;
+  }
+
+  // --- Session ---
+
+  async authStatus(): Promise<{ authenticated: boolean; connected: boolean; competing: boolean }> {
+    return this.request('/v1/api/iserver/auth/status', { method: 'POST' });
+  }
+
+  async tickle(): Promise<void> {
+    await this.request<unknown>('/v1/api/tickle', { method: 'POST' });
+  }
+
+  async ssoValidate(): Promise<void> {
+    await this.request('/v1/api/sso/validate');
+  }
+
+  async logout(): Promise<void> {
+    await this.request('/v1/api/logout', { method: 'POST' });
   }
 
   // --- Account ---
 
+  async getAccounts(): Promise<IBAccount[]> {
+    const data = await this.request<{ accounts: string[] } | IBAccount[]>(
+      '/v1/api/portfolio/accounts'
+    );
+    if (Array.isArray(data)) return data;
+    return [];
+  }
+
   async getAccountSummary(): Promise<IBAccountSummary> {
-    const data = await this.request<IBAccountSummaryResponse>(
+    return this.request<IBAccountSummary>(
       `/v1/api/portfolio/${this.config.accountId}/summary`
     );
-    return data;
+  }
+
+  async getAccountLedger(): Promise<Record<string, IBLedgerEntry>> {
+    return this.request<Record<string, IBLedgerEntry>>(
+      `/v1/api/portfolio/${this.config.accountId}/ledger`
+    );
   }
 
   // --- Positions ---
@@ -90,6 +122,33 @@ export class IBClient {
     return this.request<IBPosition[]>(
       `/v1/api/portfolio/${this.config.accountId}/positions/0`
     );
+  }
+
+  // --- Contract Search ---
+
+  async searchContract(symbol: string, secType: string): Promise<IBContractSearchResult[]> {
+    return this.request<IBContractSearchResult[]>(
+      '/v1/api/iserver/secdef/search',
+      {
+        method: 'POST',
+        body: JSON.stringify({ symbol, secType }),
+      }
+    );
+  }
+
+  // --- Market Data ---
+
+  async getMarketDataSnapshot(conids: number[], fields: string[]): Promise<IBMarketDataSnapshot[]> {
+    const conidStr = conids.join(',');
+    const fieldStr = fields.join(',');
+    return this.request<IBMarketDataSnapshot[]>(
+      `/v1/api/iserver/marketdata/snapshot?conids=${conidStr}&fields=${fieldStr}`
+    );
+  }
+
+  async getLiveQuote(conid: number): Promise<IBMarketDataSnapshot> {
+    const snapshots = await this.getMarketDataSnapshot([conid], ['84', '86']);
+    return snapshots[0] || {};
   }
 
   // --- Orders ---
@@ -114,6 +173,20 @@ export class IBClient {
     );
   }
 
+  /**
+   * Confirm an order that requires a reply.
+   * IB Gateway returns a message with a replyId that must be confirmed.
+   */
+  async confirmOrder(replyId: string): Promise<IBOrderResponse[]> {
+    return this.request<IBOrderResponse[]>(
+      `/v1/api/iserver/reply/${replyId}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ confirmed: true }),
+      }
+    );
+  }
+
   async getOpenOrders(): Promise<IBOpenOrder[]> {
     return this.request<IBOpenOrder[]>('/v1/api/iserver/account/orders');
   }
@@ -125,40 +198,56 @@ export class IBClient {
     );
   }
 
-  // --- Market Data ---
-
-  async getMarketDataSnapshot(conids: number[], fields: string[]): Promise<IBMarketDataSnapshot[]> {
-    const conidStr = conids.join(',');
-    const fieldStr = fields.join(',');
-    return this.request<IBMarketDataSnapshot[]>(
-      `/v1/api/iserver/marketdata/snapshot?conids=${conidStr}&fields=${fieldStr}`
-    );
-  }
-
   // --- Trades / Executions ---
 
   async getTrades(): Promise<IBExecution[]> {
     return this.request<IBExecution[]>('/v1/api/iserver/account/trades');
   }
-
-  // --- Session ---
-
-  async tickle(): Promise<void> {
-    await this.request<unknown>('/v1/api/tickle', { method: 'POST' });
-  }
-
-  async authStatus(): Promise<{ authenticated: boolean; competing: boolean }> {
-    return this.request<{ authenticated: boolean; competing: boolean }>('/v1/api/iserver/auth/status', { method: 'POST' });
-  }
 }
 
-// --- IB API Response Types ---
+// --- IB Gateway Response Types ---
+
+export interface IBAccount {
+  id: string;
+  accountId: string;
+  accountTitle: string;
+  displayName: string;
+  accountAlias: string;
+  accountStatus: number;
+  currency: string;
+  type: string;
+  tradingType: string;
+  covestor: boolean;
+  parent?: { mmc: string[]; accountId: string; isMParent: boolean; isMChild: boolean };
+}
+
+export interface IBLedgerEntry {
+  commoditymarketvalue: number;
+  futuremarketvalue: number;
+  settledcash: number;
+  exchangerate: number;
+  sessionid: number;
+  cashbalance: number;
+  corporatebondsmarketvalue: number;
+  warrantsmarketvalue: number;
+  netliquidationvalue: number;
+  interest: number;
+  unrealizedpnl: number;
+  stockmarketvalue: number;
+  moneyfunds: number;
+  currency: string;
+  realizedpnl: number;
+  funds: number;
+  acctcode: string;
+  issueroptionsmarketvalue: number;
+  key: string;
+  timestamp: number;
+  severity: number;
+}
 
 export interface IBAccountSummary {
   [key: string]: IBAccountField;
 }
-
-export type IBAccountSummaryResponse = IBAccountSummary;
 
 export interface IBAccountField {
   amount: number;
@@ -191,6 +280,19 @@ export interface IBPosition {
   model: string;
 }
 
+export interface IBContractSearchResult {
+  conid: number;
+  companyHeader: string;
+  companyName: string;
+  symbol: string;
+  description: string;
+  restricted: string;
+  fop: string;
+  opt: string;
+  war: string;
+  sections: Array<{ secType: string; exchange: string }>;
+}
+
 export interface IBOrderRequest {
   conid: number;
   orderType: string; // 'MKT', 'LMT', 'STP', etc.
@@ -205,13 +307,14 @@ export interface IBOrderRequest {
   cOID?: string; // Client order ID
   parentId?: string; // For bracket orders
   isClose?: boolean;
+  secType?: string; // e.g. 'CASH'
 }
 
 export interface IBOrderResponse {
   order_id: string;
   order_status: string;
   encrypt_message?: string;
-  // Confirmation may require reply
+  // Confirmation prompt fields — must call confirmOrder(id) to proceed
   id?: string;
   message?: string[];
   isSuppressed?: boolean;
@@ -241,7 +344,6 @@ export interface IBMarketDataSnapshot {
   conid: number;
   // Field IDs: 31=Last, 84=Bid, 85=AskSize, 86=Ask, 7295=Open, etc.
   [key: string]: unknown;
-  // Common fields
   '31'?: string; // Last Price
   '84'?: string; // Bid
   '86'?: string; // Ask

@@ -1,0 +1,7 @@
+# IB Gateway binaries — downloaded from IB, not tracked in git.
+# Place clientportal.gw.zip contents in gateway/ before building.
+gateway/build/
+gateway/dist/
+gateway/root/vertx.jks
+gateway/root/demo.zip
+gateway/root/webapps/

@@ -1,8 +1,11 @@
 /**
  * interactive-brokers/adapter.ts
  *
- * Implements BrokerAdapter for Interactive Brokers Web API.
+ * Implements BrokerAdapter for the IB Client Portal Gateway.
  * Translates between the normalized adapter interface and IB-specific API calls.
+ *
+ * Authentication is session-based — the user must log in via browser at the
+ * gateway URL. No OAuth tokens or API keys required.
  */
 
 import {
@@ -22,14 +25,17 @@ import {
   InstrumentNotSupportedError,
 } from '../errors';
 import { INSTRUMENTS, InstrumentConfig } from '../instruments';
-import { IBClient, IBOrderRequest } from './client';
+import { IBClient, IBOrderRequest, IBOrderResponse } from './client';
 import { IBAuthManager } from './auth';
 import { IBKeepalive } from './keepalive';
 import { getSettings } from '../../db';
 
+const DEFAULT_GATEWAY_URL = process.env.IB_GATEWAY_URL || 'https://localhost:5000';
+
 export class IBAdapter implements BrokerAdapter {
   readonly brokerName = 'interactive_brokers' as const;
   private client: IBClient | null = null;
+  private authManager: IBAuthManager | null = null;
   private keepalive: IBKeepalive | null = null;
   private connected = false;
 
@@ -37,45 +43,39 @@ export class IBAdapter implements BrokerAdapter {
     if (this.connected) return;
 
     const settings = await getSettings();
-    const mode = settings.trading_mode || 'practice';
 
-    const consumerKey = mode === 'live'
-      ? settings.ib_live_consumer_key || ''
-      : settings.ib_practice_consumer_key || '';
-    const privateKey = mode === 'live'
-      ? settings.ib_live_private_key || ''
-      : settings.ib_practice_private_key || '';
-    const accountId = mode === 'live'
-      ? settings.ib_live_account_id || ''
-      : settings.ib_practice_account_id || '';
+    const gatewayUrl = settings.ib_gateway_url || DEFAULT_GATEWAY_URL;
+    const accountId = settings.ib_account_id || '';
 
-    if (!consumerKey || !privateKey || !accountId) {
+    if (!accountId) {
       throw new BrokerError(
-        'IB credentials not configured. Set consumer key, private key, and account ID in settings.',
+        'IB Account ID not configured. Set account ID in settings.',
         'interactive_brokers',
         'MISSING_CREDENTIALS',
         false,
       );
     }
 
-    const authManager = new IBAuthManager({
-      consumerKey,
-      privateKeyPem: privateKey,
-    });
-
-    const baseUrl = 'https://api.ibkr.com';
-
-    this.client = new IBClient({ baseUrl, accountId, authManager });
-    this.keepalive = new IBKeepalive(baseUrl, () => this.client!.getAuthHeaders());
+    this.authManager = new IBAuthManager(gatewayUrl);
+    this.client = new IBClient({ gatewayUrl, accountId });
+    this.keepalive = new IBKeepalive(gatewayUrl);
     this.keepalive.start();
     this.connected = true;
 
-    console.log(`[IB] Connected (mode: ${mode}, account: ${accountId})`);
+    // Check if gateway is authenticated — log warning but don't fail.
+    // The user may not have logged in yet. Auth errors will surface on actual API calls.
+    try {
+      await this.authManager.ensureAuthenticated();
+      console.log(`[IB] Connected and authenticated via gateway at ${gatewayUrl} (account: ${accountId})`);
+    } catch (e) {
+      console.warn(`[IB] Connected to gateway at ${gatewayUrl} but NOT authenticated. User must log in via the gateway. Error: ${e}`);
+    }
   }
 
   async disconnect(): Promise<void> {
     this.keepalive?.stop();
     this.client = null;
+    this.authManager = null;
     this.connected = false;
     console.log('[IB] Disconnected');
   }
@@ -99,23 +99,30 @@ export class IBAdapter implements BrokerAdapter {
 
   async getAccountSummary(): Promise<AccountSummary> {
     const client = this.getClient();
-    const data = await client.getAccountSummary();
+    const ledger = await client.getAccountLedger();
 
-    // IB account summary uses field keys like 'totalcashvalue', 'netliquidation', etc.
-    const getVal = (key: string): number => {
-      const field = data[key];
-      if (!field) return 0;
-      return typeof field.amount === 'number' ? field.amount : parseFloat(field.value || '0');
-    };
+    // The ledger has entries keyed by currency. The "BASE" key has the totals.
+    const base = ledger['BASE'] || Object.values(ledger)[0];
+    if (!base) {
+      return {
+        balance: 0,
+        nav: 0,
+        marginAvailable: 0,
+        unrealizedPL: 0,
+        currency: 'USD',
+        openTradeCount: 0,
+        marginUsed: 0,
+      };
+    }
 
     return {
-      balance: getVal('totalcashvalue'),
-      nav: getVal('netliquidation'),
-      marginAvailable: getVal('availablefunds'),
-      unrealizedPL: getVal('unrealizedpnl'),
-      currency: data['currency']?.value || 'USD',
-      openTradeCount: 0, // Will be populated from positions
-      marginUsed: getVal('initmarginreq'),
+      balance: base.cashbalance || 0,
+      nav: base.netliquidationvalue || 0,
+      marginAvailable: base.funds || 0,
+      unrealizedPL: base.unrealizedpnl || 0,
+      currency: base.currency || 'USD',
+      openTradeCount: 0, // Populated from positions
+      marginUsed: 0,
     };
   }
 
@@ -171,8 +178,6 @@ export class IBAdapter implements BrokerAdapter {
   }
 
   async getTradeDetails(brokerTradeId: string): Promise<BrokerTrade> {
-    // IB doesn't have a single "trade details" endpoint like Oanda.
-    // We check positions first, then executions.
     const client = this.getClient();
 
     // Check if it's still an open position (brokerTradeId = conid for positions)
@@ -224,8 +229,6 @@ export class IBAdapter implements BrokerAdapter {
   }
 
   async getTransactionsSinceId(_id: string): Promise<TransactionRecord[]> {
-    // IB Web API doesn't have a direct equivalent of Oanda's transaction stream.
-    // Return executions as transaction records.
     const client = this.getClient();
     const executions = await client.getTrades();
     return executions.map((exec) => ({
@@ -254,6 +257,7 @@ export class IBAdapter implements BrokerAdapter {
     // Build bracket order: parent market + TP limit + SL stop
     const parentOrder: IBOrderRequest = {
       conid: config.ib.conid,
+      secType: config.ib.secType,
       orderType: 'MKT',
       side,
       quantity,
@@ -265,6 +269,7 @@ export class IBAdapter implements BrokerAdapter {
     const tpSide = side === 'BUY' ? 'SELL' : 'BUY';
     const tpOrder: IBOrderRequest = {
       conid: config.ib.conid,
+      secType: config.ib.secType,
       orderType: 'LMT',
       side: tpSide,
       quantity,
@@ -277,6 +282,7 @@ export class IBAdapter implements BrokerAdapter {
 
     const slOrder: IBOrderRequest = {
       conid: config.ib.conid,
+      secType: config.ib.secType,
       orderType: 'STP',
       side: tpSide,
       quantity,
@@ -287,7 +293,7 @@ export class IBAdapter implements BrokerAdapter {
       parentId: parentOrder.cOID,
     };
 
-    let response;
+    let response: IBOrderResponse[];
     try {
       response = await client.placeBracketOrder([parentOrder, tpOrder, slOrder]);
     } catch (e) {
@@ -297,39 +303,66 @@ export class IBAdapter implements BrokerAdapter {
       throw e;
     }
 
-    // IB may return a confirmation prompt that needs to be replied to.
-    // Check for order_id in the response.
-    const parentResponse = response[0];
-    if (!parentResponse) {
+    // Handle the IB confirmation flow — gateway may return a prompt requiring reply
+    const result = await this.handleOrderResponse(client, response);
+    return result;
+  }
+
+  /**
+   * IB Gateway order responses may require confirmation via /iserver/reply/{replyId}.
+   * This handles the full confirmation chain.
+   */
+  private async handleOrderResponse(
+    client: IBClient,
+    response: IBOrderResponse[],
+  ): Promise<OrderResult> {
+    if (!response.length) {
       return { filled: false, rejectedReason: 'No response from IB order placement' };
     }
 
-    // IB sometimes returns a message requiring confirmation
-    if (parentResponse.message && parentResponse.id) {
-      // Auto-confirm the order by replying
+    const first = response[0];
+
+    // If we got an order_id, the order was accepted
+    if (first.order_id) {
+      return {
+        filled: true,
+        brokerTradeId: first.order_id,
+        fillPrice: undefined, // IB fills asynchronously
+      };
+    }
+
+    // If we got a confirmation prompt (id + message), reply to confirm
+    if (first.id && first.message) {
+      console.log(`[IB] Order requires confirmation: ${first.message.join('; ')}`);
       try {
-        const confirmResponse = await client.placeBracketOrder([parentOrder, tpOrder, slOrder]);
+        const confirmResponse = await client.confirmOrder(first.id);
+
+        // Confirmation may chain — handle recursively (max 1 level deep)
         if (confirmResponse[0]?.order_id) {
           return {
             filled: true,
             brokerTradeId: confirmResponse[0].order_id,
-            fillPrice: undefined, // IB fills asynchronously — price comes later
+            fillPrice: undefined,
           };
         }
-      } catch {
-        // Fall through to rejection
+
+        // Second confirmation needed (rare but possible)
+        if (confirmResponse[0]?.id && confirmResponse[0]?.message) {
+          const secondConfirm = await client.confirmOrder(confirmResponse[0].id);
+          if (secondConfirm[0]?.order_id) {
+            return {
+              filled: true,
+              brokerTradeId: secondConfirm[0].order_id,
+              fillPrice: undefined,
+            };
+          }
+        }
+      } catch (e) {
+        console.error('[IB] Order confirmation failed:', e);
       }
     }
 
-    if (parentResponse.order_id) {
-      return {
-        filled: true,
-        brokerTradeId: parentResponse.order_id,
-        fillPrice: undefined, // Will be populated by getTradeDetails later
-      };
-    }
-
-    const reason = parentResponse.message?.join('; ') || parentResponse.order_status || 'Unknown error';
+    const reason = first.message?.join('; ') || first.order_status || 'Unknown error';
     if (reason.toLowerCase().includes('margin')) {
       throw new InsufficientMarginError('interactive_brokers');
     }
@@ -345,7 +378,6 @@ export class IBAdapter implements BrokerAdapter {
     const pos = positions.find((p) => String(p.conid) === brokerTradeId);
 
     if (!pos || pos.position === 0) {
-      // Position already flat
       return { fillPrice: undefined, realizedPL: undefined };
     }
 
@@ -361,10 +393,12 @@ export class IBAdapter implements BrokerAdapter {
     };
 
     const response = await client.placeOrder(closeOrder);
-    const orderId = response[0]?.order_id;
+
+    // Handle confirmation if needed
+    await this.handleOrderResponse(client, response);
 
     return {
-      fillPrice: pos.mktPrice || undefined, // Approximate — actual fill comes asynchronously
+      fillPrice: pos.mktPrice || undefined,
       realizedPL: pos.realizedPnl || undefined,
     };
   }
@@ -372,13 +406,12 @@ export class IBAdapter implements BrokerAdapter {
   // --- Market Data ---
 
   async getCandles(
-    instrument: string,
-    from: string,
-    to: string,
-    granularity = 'M1',
+    _instrument: string,
+    _from: string,
+    _to: string,
+    _granularity = 'M1',
   ): Promise<CandleData[]> {
-    // IB Web API historical data is more complex — simplified implementation
-    // For now, return empty. Can be enhanced with /iserver/marketdata/history endpoint.
+    // IB Gateway historical data can be enhanced with /iserver/marketdata/history
     console.warn('[IB] getCandles not fully implemented — returning empty');
     return [];
   }

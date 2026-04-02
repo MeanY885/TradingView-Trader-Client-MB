@@ -1,24 +1,21 @@
 /**
  * interactive-brokers/keepalive.ts
  *
- * Manages the IB Web API session keepalive.
- * IB sessions time out after 5 minutes of inactivity.
- * This module calls /tickle every 4 minutes to maintain the session.
+ * Keeps the IB Client Portal Gateway session alive by calling /tickle
+ * every 55 seconds (session times out after ~5 minutes of inactivity).
+ * No auth headers needed — the gateway uses session-based auth.
  */
 
-const KEEPALIVE_INTERVAL_MS = 4 * 60 * 1000; // 4 minutes
+import { ibGatewayFetch } from './gateway-fetch';
+
+const KEEPALIVE_INTERVAL_MS = 55 * 1000; // 55 seconds
 
 export class IBKeepalive {
   private intervalId: ReturnType<typeof setInterval> | null = null;
-  private baseUrl: string;
-  private getAuthHeaders: () => Promise<Record<string, string>>;
+  private gatewayUrl: string;
 
-  constructor(
-    baseUrl: string,
-    getAuthHeaders: () => Promise<Record<string, string>>,
-  ) {
-    this.baseUrl = baseUrl;
-    this.getAuthHeaders = getAuthHeaders;
+  constructor(gatewayUrl: string) {
+    this.gatewayUrl = gatewayUrl;
   }
 
   start(): void {
@@ -26,10 +23,9 @@ export class IBKeepalive {
 
     this.intervalId = setInterval(async () => {
       try {
-        const headers = await this.getAuthHeaders();
-        const res = await fetch(`${this.baseUrl}/v1/api/tickle`, {
+        const res = await ibGatewayFetch(`${this.gatewayUrl}/v1/api/tickle`, {
           method: 'POST',
-          headers,
+          headers: { 'Content-Type': 'application/json' },
         });
         if (!res.ok) {
           console.warn(`[IB-KEEPALIVE] Tickle failed (${res.status}) — session may have expired`);
@@ -39,7 +35,7 @@ export class IBKeepalive {
       }
     }, KEEPALIVE_INTERVAL_MS);
 
-    console.log('[IB-KEEPALIVE] Session keepalive started (every 4 min)');
+    console.log('[IB-KEEPALIVE] Session keepalive started (every 55s)');
   }
 
   stop(): void {

@@ -26,13 +26,9 @@ const ALLOWED_KEYS = [
   'practice_account_id',
   'live_api_key',
   'live_account_id',
-  // Interactive Brokers credentials
-  'ib_practice_consumer_key',
-  'ib_practice_private_key',
-  'ib_practice_account_id',
-  'ib_live_consumer_key',
-  'ib_live_private_key',
-  'ib_live_account_id',
+  // Interactive Brokers (Client Portal Gateway)
+  'ib_gateway_url',
+  'ib_account_id',
   // Broker selection
   'broker',
   'risk_percentage', // fallback for old DB rows
@@ -82,21 +78,10 @@ export async function GET() {
 
     const hasPracticeKey = !!(raw.practice_api_key || process.env.OANDA_API_KEY_PRACTICE);
     const hasLiveKey = !!(raw.live_api_key || process.env.OANDA_API_KEY_LIVE);
-    const hasIbPracticeKey = !!raw.ib_practice_consumer_key;
-    const hasIbLiveKey = !!raw.ib_live_consumer_key;
-    const hasIbPracticePrivateKey = !!raw.ib_practice_private_key;
-    const hasIbLivePrivateKey = !!raw.ib_live_private_key;
 
-    // Strip all secret keys from response
-    const {
-      practice_api_key, live_api_key,
-      ib_practice_consumer_key, ib_live_consumer_key,
-      ib_practice_private_key, ib_live_private_key,
-      ...rest
-    } = raw;
+    // Strip secret keys from response (only Oanda API keys are secrets)
+    const { practice_api_key, live_api_key, ...rest } = raw;
     void practice_api_key; void live_api_key;
-    void ib_practice_consumer_key; void ib_live_consumer_key;
-    void ib_practice_private_key; void ib_live_private_key;
 
     return NextResponse.json({
       ...rest,
@@ -105,10 +90,9 @@ export async function GET() {
       live_account_id: raw.live_account_id || process.env.OANDA_ACCOUNT_ID_LIVE || '',
       hasPracticeKey,
       hasLiveKey,
-      hasIbPracticeKey,
-      hasIbLiveKey,
-      hasIbPracticePrivateKey,
-      hasIbLivePrivateKey,
+      // IB gateway fields (not secrets — just a URL and account ID)
+      ib_gateway_url: raw.ib_gateway_url || process.env.IB_GATEWAY_URL || 'https://localhost:5000',
+      ib_account_id: raw.ib_account_id || '',
     });
   } catch (e) {
     console.error('Settings fetch error:', e);
@@ -211,8 +195,15 @@ export async function PUT(request: Request) {
         }
       }
 
-      // Skip blank API key/secret updates (keep existing)
-      const secretKeys = ['practice_api_key', 'live_api_key', 'ib_practice_consumer_key', 'ib_live_consumer_key', 'ib_practice_private_key', 'ib_live_private_key'];
+      if (key === 'ib_gateway_url') {
+        const v = String(value).trim();
+        if (v && !v.startsWith('https://')) {
+          return NextResponse.json({ error: 'ib_gateway_url must start with https://' }, { status: 400 });
+        }
+      }
+
+      // Skip blank API key updates (keep existing)
+      const secretKeys = ['practice_api_key', 'live_api_key'];
       if (secretKeys.includes(key) && !String(value).trim()) {
         continue;
       }
@@ -224,18 +215,9 @@ export async function PUT(request: Request) {
     const updated = await getSettings();
     const hasPracticeKey = !!(updated.practice_api_key || process.env.OANDA_API_KEY_PRACTICE);
     const hasLiveKey = !!(updated.live_api_key || process.env.OANDA_API_KEY_LIVE);
-    const hasIbPracticeKey = !!updated.ib_practice_consumer_key;
-    const hasIbLiveKey = !!updated.ib_live_consumer_key;
-    const hasIbPracticePrivateKey = !!updated.ib_practice_private_key;
-    const hasIbLivePrivateKey = !!updated.ib_live_private_key;
 
-    const {
-      practice_api_key: _pk, live_api_key: _lk,
-      ib_practice_consumer_key: _ipc, ib_live_consumer_key: _ilc,
-      ib_practice_private_key: _ipp, ib_live_private_key: _ilp,
-      ...rest
-    } = updated;
-    void _pk; void _lk; void _ipc; void _ilc; void _ipp; void _ilp;
+    const { practice_api_key: _pk, live_api_key: _lk, ...rest } = updated;
+    void _pk; void _lk;
 
     return NextResponse.json({
       ...rest,
@@ -244,10 +226,8 @@ export async function PUT(request: Request) {
       live_account_id: updated.live_account_id || process.env.OANDA_ACCOUNT_ID_LIVE || '',
       hasPracticeKey,
       hasLiveKey,
-      hasIbPracticeKey,
-      hasIbLiveKey,
-      hasIbPracticePrivateKey,
-      hasIbLivePrivateKey,
+      ib_gateway_url: updated.ib_gateway_url || process.env.IB_GATEWAY_URL || 'https://localhost:5000',
+      ib_account_id: updated.ib_account_id || '',
     });
   } catch (e) {
     console.error('Settings update error:', e);
