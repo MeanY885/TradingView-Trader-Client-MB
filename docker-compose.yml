@@ -13,9 +13,8 @@ services:
     image: tradingview-trader_app
     ports:
       - "2000:2000"
-    env_file: ./.env
     environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/tradingview_trader
+      DATABASE_URL: postgresql://postgres:tvtrader_pg_2026@postgres:5432/tradingview_trader
       # IB Gateway is accessible within the Docker network on this URL.
       # The app uses this internally; no auth headers needed (session-based).
       IB_GATEWAY_URL: https://ib-gateway:5000
@@ -26,11 +25,10 @@ services:
 
   postgres:
     image: postgres:15-alpine
-    env_file: ./.env
     environment:
       POSTGRES_DB: tradingview_trader
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: tvtrader_pg_2026
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
