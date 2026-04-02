@@ -17,7 +17,8 @@ services:
       DATABASE_URL: postgresql://postgres:tvtrader_pg_2026@postgres:5432/tradingview_trader
       # IB Gateway is accessible within the Docker network on this URL.
       # The app uses this internally; no auth headers needed (session-based).
-      IB_GATEWAY_URL: http://ib-gateway:5000
+      IB_GATEWAY_URL: https://ib-gateway:5000
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
     depends_on:
       postgres:
         condition: service_healthy
