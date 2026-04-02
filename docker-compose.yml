@@ -10,7 +10,7 @@ services:
     restart: unless-stopped
 
   app:
-    image: tradingview-trader_app
+    build: ./tvtrader-app
     ports:
       - "2000:2000"
     environment:
