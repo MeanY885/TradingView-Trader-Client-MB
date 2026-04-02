@@ -1,5 +1,7 @@
 FROM eclipse-temurin:11-jre-alpine
 
+RUN apk add --no-cache bash
+
 WORKDIR /opt/ibkr
 
 # Copy the Client Portal Gateway files (from the official IB zip)
@@ -16,5 +18,5 @@ RUN chmod +x bin/run.sh
 
 EXPOSE 5000
 
-# Start the gateway with our config
-CMD ["bin/run.sh", "root/conf.yaml"]
+# Use absolute path — the temurin entrypoint wraps the CMD
+CMD ["/opt/ibkr/bin/run.sh", "root/conf.yaml"]
