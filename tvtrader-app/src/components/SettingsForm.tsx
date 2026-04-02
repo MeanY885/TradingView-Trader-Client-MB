@@ -493,8 +493,10 @@ export default function SettingsForm() {
                 <button
                   type="button"
                   onClick={() => {
-                    // Open gateway login — Caddy routes /sso/* directly to the gateway
-                    window.open(`${window.location.origin}/sso/Login?forwardTo=22&RL=1&ip2loc=US`, '_blank', 'noopener');
+                    // Open gateway login directly on port 5000 (self-signed cert)
+                    // The gateway login page requires direct access — cookies are domain-bound
+                    const gwUrl = `https://${window.location.hostname}:5000`;
+                    window.open(gwUrl, '_blank', 'noopener');
                   }}
                   className={`px-4 py-1.5 text-xs font-semibold rounded transition-colors ${
                     ibGatewayStatus?.authenticated
@@ -508,7 +510,7 @@ export default function SettingsForm() {
               <p className="text-xs text-muted">
                 {ibGatewayStatus?.authenticated
                   ? 'Session is active. It will be kept alive automatically. IB requires re-login approximately once per day during scheduled maintenance.'
-                  : 'Opens the IB gateway login in a new tab. Log in with your IB credentials and 2FA, then click Refresh above to confirm.'}
+                  : 'Opens the IB gateway login in a new tab. Accept the security warning (self-signed cert), log in with your IB credentials and 2FA, then click Refresh above.'}
               </p>
             </div>
           </div>
