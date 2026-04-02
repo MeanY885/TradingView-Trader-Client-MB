@@ -261,33 +261,24 @@ export async function handleBuySell(signal: WebhookSignal): Promise<{ success: b
 
   await logSignal(signal, 'trade_opened', true);
 
-  // Verify TP/SL after 10 seconds
+  // Log TP/SL verification after 10 seconds (informational only).
+  // IB bracket orders are submitted together, so TP/SL should always exist.
+  // We no longer auto-close on verification failure — the IB order API doesn't
+  // expose bracket orders through getTradeDetails, leading to false negatives.
   setTimeout(async () => {
     try {
       const brokerForVerify = await getBroker();
-      const details = await brokerForVerify.getTradeDetails(tradeId);
-      const hasTP = details.takeProfitPrice !== undefined || details.takeProfitFilled;
-      const hasSL = details.stopLossPrice !== undefined || details.stopLossFilled;
-      if (hasTP && hasSL) {
-        return;
+      const openOrders = await brokerForVerify.getOpenOrders();
+      const relatedOrders = openOrders.filter(
+        (o: { parentId?: string }) => o.parentId === tradeId || String(o.parentId) === tradeId
+      );
+      if (relatedOrders.length < 2) {
+        console.warn(`[TRADE] TP/SL verification: found ${relatedOrders.length} child orders for trade ${tradeId} — bracket orders may be inactive (market closed) or not yet visible`);
+      } else {
+        console.log(`[TRADE] TP/SL verification OK: ${relatedOrders.length} bracket orders for trade ${tradeId}`);
       }
-      const missing = hasTP ? 'SL' : 'TP';
-      console.error(`MISSING ${missing} ORDER on trade ${tradeId} — closing trade`);
-      const closeResult = await brokerForVerify.closeTrade(tradeId);
-      const closePrice = closeResult.fillPrice?.toString() || '';
-      const closePL = closeResult.realizedPL?.toString() || '0';
-      const closeStatus = hasTP ? 'exited_no_sl' : 'exited_no_tp';
-      await query(
-        'UPDATE trades SET status = $1, close_price = $2, realized_pl = $3, closed_at = NOW() WHERE broker_trade_id = $4',
-        [closeStatus, closePrice, closePL, tradeId]
-      );
-      await query(
-        `INSERT INTO signal_log (action, instrument, payload, result, success, error)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [direction, signal.instrument, JSON.stringify({ tradeId, missing }), closeStatus, false, `Missing ${missing} order — trade closed`]
-      );
     } catch (e) {
-      console.error(`TP/SL verification failed for trade ${tradeId}:`, e);
+      console.warn(`[TRADE] TP/SL verification skipped for trade ${tradeId}:`, e);
     }
   }, 10000);
 
