@@ -6,7 +6,9 @@
 
 :80 {
     # IB Client Portal Gateway — served directly for login page
-    handle_path /ib-login/* {
+    @iblogin path /ib-login /ib-login/*
+    handle @iblogin {
+        uri strip_prefix /ib-login
         reverse_proxy ib-gateway:5000 {
             transport http {
                 tls_insecure_skip_verify
