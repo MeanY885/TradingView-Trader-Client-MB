@@ -493,9 +493,11 @@ export default function SettingsForm() {
                 <button
                   type="button"
                   onClick={() => {
-                    // Open gateway login directly on the IB gateway
-                    const gwUrl = (settings.ib_gateway_url || 'http://localhost:5000').replace(/\/+$/, '');
-                    window.open(`${gwUrl}/sso/Login?forwardTo=22&RL=1&ip2loc=US`, '_blank', 'noopener');
+                    // Open gateway login in user's browser.
+                    // The gateway is exposed on port 5000 of the same host.
+                    // We use the current hostname so it works from any client.
+                    const gwLoginUrl = `http://${window.location.hostname}:5000/sso/Login?forwardTo=22&RL=1&ip2loc=US`;
+                    window.open(gwLoginUrl, '_blank', 'noopener');
                   }}
                   className={`px-4 py-1.5 text-xs font-semibold rounded transition-colors ${
                     ibGatewayStatus?.authenticated
