@@ -132,20 +132,29 @@ export class IBAdapter implements BrokerAdapter {
     const client = this.getClient();
     const config = this.getIBInstrument(instrument);
     // Fields: 84=Bid, 86=Ask
-    const snapshots = await client.getMarketDataSnapshot([config.ib.conid], ['84', '86']);
-    const snap = snapshots[0];
-    if (!snap) {
-      throw new BrokerError(`No market data for ${instrument}`, 'interactive_brokers', 'NO_MARKET_DATA', true);
+    // IB's snapshot API requires priming — the first call subscribes to the data
+    // and often returns zeros. Retry up to 3 times with a short delay.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const snapshots = await client.getMarketDataSnapshot([config.ib.conid], ['84', '86']);
+      const snap = snapshots[0];
+      if (!snap) {
+        throw new BrokerError(`No market data for ${instrument}`, 'interactive_brokers', 'NO_MARKET_DATA', true);
+      }
+
+      const bid = parseFloat(String(snap['84'] || '0'));
+      const ask = parseFloat(String(snap['86'] || '0'));
+
+      if (bid > 0 && ask > 0) {
+        return { instrument, ask, bid };
+      }
+
+      // Wait before retrying to let IB populate the data
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
     }
 
-    const bid = parseFloat(String(snap['84'] || '0'));
-    const ask = parseFloat(String(snap['86'] || '0'));
-
-    if (bid <= 0 || ask <= 0) {
-      throw new BrokerError(`Invalid pricing for ${instrument}: bid=${bid}, ask=${ask}`, 'interactive_brokers', 'INVALID_PRICE', true);
-    }
-
-    return { instrument, ask, bid };
+    throw new BrokerError(`Invalid pricing for ${instrument} after retries`, 'interactive_brokers', 'INVALID_PRICE', true);
   }
 
   async getPricingMulti(instruments: string[]): Promise<PriceQuote[]> {
