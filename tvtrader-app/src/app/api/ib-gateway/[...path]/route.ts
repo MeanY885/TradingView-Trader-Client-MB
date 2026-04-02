@@ -115,6 +115,11 @@ async function proxyRequest(request: NextRequest, method: string) {
         '<head>',
         '<head><base href="/api/ib-gateway/">',
       );
+      // <base> doesn't affect CSS url() — rewrite @import and url() in inline styles
+      html = html.replace(
+        /url\(\s*['"]?\//g,
+        "url('/api/ib-gateway/",
+      );
       return new NextResponse(html, {
         status: res.status,
         headers: responseHeaders,
