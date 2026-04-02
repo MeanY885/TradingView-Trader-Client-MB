@@ -92,10 +92,17 @@ export async function handleBuySell(signal: WebhookSignal): Promise<{ success: b
 
   const broker = await getBroker();
 
-  const [accountSummary, pricing] = await Promise.all([
+  const [accountSummary, pricingResult] = await Promise.all([
     broker.getAccountSummary(),
-    broker.getPricing(signal.instrument),
+    broker.getPricing(signal.instrument).catch((e) => {
+      console.warn(`[TRADE] Market data unavailable for ${signal.instrument}, using signal entry price: ${e.message}`);
+      return null;
+    }),
   ]);
+
+  // Fall back to signal entry price if broker market data is unavailable
+  const entryFallback = parseFloat(signal.entry!);
+  const pricing = pricingResult ?? { instrument: signal.instrument, bid: entryFallback, ask: entryFallback };
 
   const settings = await getSettings();
 
@@ -502,7 +509,8 @@ async function syncFromTransactions(trade: Trade): Promise<boolean> {
 
 async function syncFromPrice(trade: Trade): Promise<boolean> {
   const broker = await getBroker();
-  const pricing = await broker.getPricing(trade.instrument);
+  const pricing = await broker.getPricing(trade.instrument).catch(() => null);
+  if (!pricing) return false;
   const mid = (pricing.ask + pricing.bid) / 2;
   const tp = parseFloat(trade.tp_price);
   const sl = parseFloat(trade.sl_price);
