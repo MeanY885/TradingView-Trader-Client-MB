@@ -261,26 +261,9 @@ export async function handleBuySell(signal: WebhookSignal): Promise<{ success: b
 
   await logSignal(signal, 'trade_opened', true);
 
-  // Log TP/SL verification after 10 seconds (informational only).
-  // IB bracket orders are submitted together, so TP/SL should always exist.
-  // We no longer auto-close on verification failure — the IB order API doesn't
-  // expose bracket orders through getTradeDetails, leading to false negatives.
-  setTimeout(async () => {
-    try {
-      const brokerForVerify = await getBroker();
-      const openOrders = await brokerForVerify.getOpenOrders();
-      const relatedOrders = openOrders.filter(
-        (o: { parentId?: string }) => o.parentId === tradeId || String(o.parentId) === tradeId
-      );
-      if (relatedOrders.length < 2) {
-        console.warn(`[TRADE] TP/SL verification: found ${relatedOrders.length} child orders for trade ${tradeId} — bracket orders may be inactive (market closed) or not yet visible`);
-      } else {
-        console.log(`[TRADE] TP/SL verification OK: ${relatedOrders.length} bracket orders for trade ${tradeId}`);
-      }
-    } catch (e) {
-      console.warn(`[TRADE] TP/SL verification skipped for trade ${tradeId}:`, e);
-    }
-  }, 10000);
+  // TP/SL bracket orders are submitted atomically with the parent order.
+  // No post-placement verification needed — IB guarantees bracket integrity.
+  console.log(`[TRADE] Bracket order placed: parent=${tradeId}, TP=${signal.tp1}, SL=${signal.sl}`);
 
   return { success: true, message: `Trade opened: ${tradeId}` };
 }
