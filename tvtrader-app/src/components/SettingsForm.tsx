@@ -325,6 +325,172 @@ export default function SettingsForm() {
 
   return (
     <div className="space-y-6">
+      {/* Broker Selection */}
+      <div className="bg-card border border-card-border rounded-lg p-6">
+        <h2 className="text-sm font-medium text-muted uppercase tracking-wider mb-1">Broker</h2>
+        <p className="text-xs text-muted mb-5">Select your broker. Changing broker will update the API credentials section below.</p>
+
+        <div className="flex items-center gap-3">
+          <select
+            value={settings.broker || 'oanda'}
+            onChange={(e) => setSettings({ ...settings, broker: e.target.value })}
+            className="bg-background border border-card-border rounded px-3 py-2 text-sm focus:outline-none focus:border-accent"
+          >
+            <option value="oanda">OANDA</option>
+            <option value="interactive_brokers">Interactive Brokers</option>
+          </select>
+          <button
+            onClick={saveBrokerSelection}
+            disabled={saving}
+            className="px-5 py-2 bg-accent text-background text-sm font-semibold rounded hover:bg-accent/90 transition-colors disabled:opacity-50"
+          >
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+          {brokerMsg && (
+            <span className={`text-sm ${brokerMsg === 'Saved' ? 'text-green' : 'text-red'}`}>{brokerMsg}</span>
+          )}
+        </div>
+      </div>
+
+      {/* API Credentials */}
+      <div className="bg-card border border-card-border rounded-lg p-6">
+        <h2 className="text-sm font-medium text-muted uppercase tracking-wider mb-1">API Credentials</h2>
+        <p className="text-xs text-muted mb-5">
+          {(settings.broker || 'oanda') === 'oanda'
+            ? 'Enter your OANDA API keys and account IDs.'
+            : 'Enter your Interactive Brokers Web API consumer keys, signing keys, and account IDs.'}
+        </p>
+
+        {(settings.broker || 'oanda') === 'oanda' ? (
+          <div className="space-y-4 max-w-md">
+            <div>
+              <label className="block text-xs text-muted mb-1">Practice Account ID</label>
+              <input
+                type="text"
+                value={settings.practice_account_id || ''}
+                onChange={(e) => setSettings({ ...settings, practice_account_id: e.target.value })}
+                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
+                placeholder="e.g. 101-004-12345678-001"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted mb-1">Practice API Key {settings.hasPracticeKey && <span className="text-green ml-1">✓ Set</span>}</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type={showPracticeKey ? 'text' : 'password'}
+                  value={practiceKey}
+                  onChange={(e) => setPracticeKey(e.target.value)}
+                  className="flex-1 bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
+                  placeholder={settings.hasPracticeKey ? '••••••••' : 'Paste API key'}
+                />
+                <button type="button" onClick={() => setShowPracticeKey(!showPracticeKey)} className="text-muted hover:text-foreground transition-colors p-1">
+                  <EyeIcon open={showPracticeKey} />
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-muted mb-1">Live Account ID</label>
+              <input
+                type="text"
+                value={settings.live_account_id || ''}
+                onChange={(e) => setSettings({ ...settings, live_account_id: e.target.value })}
+                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
+                placeholder="e.g. 001-004-12345678-001"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted mb-1">Live API Key {settings.hasLiveKey && <span className="text-green ml-1">✓ Set</span>}</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type={showLiveKey ? 'text' : 'password'}
+                  value={liveKey}
+                  onChange={(e) => setLiveKey(e.target.value)}
+                  className="flex-1 bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
+                  placeholder={settings.hasLiveKey ? '••••••••' : 'Paste API key'}
+                />
+                <button type="button" onClick={() => setShowLiveKey(!showLiveKey)} className="text-muted hover:text-foreground transition-colors p-1">
+                  <EyeIcon open={showLiveKey} />
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4 max-w-md">
+            <div>
+              <label className="block text-xs text-muted mb-1">Practice Account ID</label>
+              <input
+                type="text"
+                value={settings.ib_practice_account_id || ''}
+                onChange={(e) => setSettings({ ...settings, ib_practice_account_id: e.target.value })}
+                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
+                placeholder="e.g. DU1234567"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted mb-1">Practice Consumer Key {settings.hasIbPracticeKey && <span className="text-green ml-1">✓ Set</span>}</label>
+              <input
+                type="password"
+                value={ibPracticeConsumerKey}
+                onChange={(e) => setIbPracticeConsumerKey(e.target.value)}
+                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
+                placeholder={settings.hasIbPracticeKey ? '••••••••' : 'Paste consumer key'}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted mb-1">Practice Signing Key (PEM) {settings.hasIbPracticePrivateKey && <span className="text-green ml-1">✓ Set</span>}</label>
+              <textarea
+                value={ibPracticePrivateKey}
+                onChange={(e) => setIbPracticePrivateKey(e.target.value)}
+                rows={3}
+                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent resize-y"
+                placeholder={settings.hasIbPracticePrivateKey ? '••••••••' : 'Paste PEM private key'}
+              />
+            </div>
+            <div className="border-t border-card-border pt-4">
+              <label className="block text-xs text-muted mb-1">Live Account ID</label>
+              <input
+                type="text"
+                value={settings.ib_live_account_id || ''}
+                onChange={(e) => setSettings({ ...settings, ib_live_account_id: e.target.value })}
+                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
+                placeholder="e.g. U1234567"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted mb-1">Live Consumer Key {settings.hasIbLiveKey && <span className="text-green ml-1">✓ Set</span>}</label>
+              <input
+                type="password"
+                value={ibLiveConsumerKey}
+                onChange={(e) => setIbLiveConsumerKey(e.target.value)}
+                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
+                placeholder={settings.hasIbLiveKey ? '••••••••' : 'Paste consumer key'}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted mb-1">Live Signing Key (PEM) {settings.hasIbLivePrivateKey && <span className="text-green ml-1">✓ Set</span>}</label>
+              <textarea
+                value={ibLivePrivateKey}
+                onChange={(e) => setIbLivePrivateKey(e.target.value)}
+                rows={3}
+                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent resize-y"
+                placeholder={settings.hasIbLivePrivateKey ? '••••••••' : 'Paste PEM private key'}
+              />
+            </div>
+          </div>
+        )}
+
+        <button
+          onClick={saveApiConfig}
+          disabled={saving}
+          className="mt-6 px-5 py-2 bg-accent text-background text-sm font-semibold rounded hover:bg-accent/90 transition-colors disabled:opacity-50"
+        >
+          {saving ? 'Saving...' : 'Save Credentials'}
+        </button>
+        {apiMsg && (
+          <span className={`ml-3 text-sm ${apiMsg === 'Saved' ? 'text-green' : 'text-red'}`}>{apiMsg}</span>
+        )}
+      </div>
+
       {/* Position Sizing */}
       <div className="bg-card border border-card-border rounded-lg p-6">
         <h2 className="text-sm font-medium text-muted uppercase tracking-wider mb-6">Position Sizing</h2>
@@ -720,172 +886,6 @@ export default function SettingsForm() {
             </div>
           )}
         </div>
-      </div>
-
-      {/* Broker Selection */}
-      <div className="bg-card border border-card-border rounded-lg p-6">
-        <h2 className="text-sm font-medium text-muted uppercase tracking-wider mb-1">Broker</h2>
-        <p className="text-xs text-muted mb-5">Select your broker. Changing broker will update the API credentials section below.</p>
-
-        <div className="flex items-center gap-3">
-          <select
-            value={settings.broker || 'oanda'}
-            onChange={(e) => setSettings({ ...settings, broker: e.target.value })}
-            className="bg-background border border-card-border rounded px-3 py-2 text-sm focus:outline-none focus:border-accent"
-          >
-            <option value="oanda">OANDA</option>
-            <option value="interactive_brokers">Interactive Brokers</option>
-          </select>
-          <button
-            onClick={saveBrokerSelection}
-            disabled={saving}
-            className="px-5 py-2 bg-accent text-background text-sm font-semibold rounded hover:bg-accent/90 transition-colors disabled:opacity-50"
-          >
-            {saving ? 'Saving...' : 'Save'}
-          </button>
-          {brokerMsg && (
-            <span className={`text-sm ${brokerMsg === 'Saved' ? 'text-green' : 'text-red'}`}>{brokerMsg}</span>
-          )}
-        </div>
-      </div>
-
-      {/* API Credentials */}
-      <div className="bg-card border border-card-border rounded-lg p-6">
-        <h2 className="text-sm font-medium text-muted uppercase tracking-wider mb-1">API Credentials</h2>
-        <p className="text-xs text-muted mb-5">
-          {(settings.broker || 'oanda') === 'oanda'
-            ? 'Enter your OANDA API keys and account IDs.'
-            : 'Enter your Interactive Brokers Web API consumer keys, signing keys, and account IDs.'}
-        </p>
-
-        {(settings.broker || 'oanda') === 'oanda' ? (
-          <div className="space-y-4 max-w-md">
-            <div>
-              <label className="block text-xs text-muted mb-1">Practice Account ID</label>
-              <input
-                type="text"
-                value={settings.practice_account_id || ''}
-                onChange={(e) => setSettings({ ...settings, practice_account_id: e.target.value })}
-                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-                placeholder="e.g. 101-004-12345678-001"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-muted mb-1">Practice API Key {settings.hasPracticeKey && <span className="text-green ml-1">✓ Set</span>}</label>
-              <div className="flex items-center gap-2">
-                <input
-                  type={showPracticeKey ? 'text' : 'password'}
-                  value={practiceKey}
-                  onChange={(e) => setPracticeKey(e.target.value)}
-                  className="flex-1 bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-                  placeholder={settings.hasPracticeKey ? '••••••••' : 'Paste API key'}
-                />
-                <button type="button" onClick={() => setShowPracticeKey(!showPracticeKey)} className="text-muted hover:text-foreground transition-colors p-1">
-                  <EyeIcon open={showPracticeKey} />
-                </button>
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs text-muted mb-1">Live Account ID</label>
-              <input
-                type="text"
-                value={settings.live_account_id || ''}
-                onChange={(e) => setSettings({ ...settings, live_account_id: e.target.value })}
-                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-                placeholder="e.g. 001-004-12345678-001"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-muted mb-1">Live API Key {settings.hasLiveKey && <span className="text-green ml-1">✓ Set</span>}</label>
-              <div className="flex items-center gap-2">
-                <input
-                  type={showLiveKey ? 'text' : 'password'}
-                  value={liveKey}
-                  onChange={(e) => setLiveKey(e.target.value)}
-                  className="flex-1 bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-                  placeholder={settings.hasLiveKey ? '••••••••' : 'Paste API key'}
-                />
-                <button type="button" onClick={() => setShowLiveKey(!showLiveKey)} className="text-muted hover:text-foreground transition-colors p-1">
-                  <EyeIcon open={showLiveKey} />
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4 max-w-md">
-            <div>
-              <label className="block text-xs text-muted mb-1">Practice Account ID</label>
-              <input
-                type="text"
-                value={settings.ib_practice_account_id || ''}
-                onChange={(e) => setSettings({ ...settings, ib_practice_account_id: e.target.value })}
-                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-                placeholder="e.g. DU1234567"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-muted mb-1">Practice Consumer Key {settings.hasIbPracticeKey && <span className="text-green ml-1">✓ Set</span>}</label>
-              <input
-                type="password"
-                value={ibPracticeConsumerKey}
-                onChange={(e) => setIbPracticeConsumerKey(e.target.value)}
-                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-                placeholder={settings.hasIbPracticeKey ? '••••••••' : 'Paste consumer key'}
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-muted mb-1">Practice Signing Key (PEM) {settings.hasIbPracticePrivateKey && <span className="text-green ml-1">✓ Set</span>}</label>
-              <textarea
-                value={ibPracticePrivateKey}
-                onChange={(e) => setIbPracticePrivateKey(e.target.value)}
-                rows={3}
-                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent resize-y"
-                placeholder={settings.hasIbPracticePrivateKey ? '••••••••' : 'Paste PEM private key'}
-              />
-            </div>
-            <div className="border-t border-card-border pt-4">
-              <label className="block text-xs text-muted mb-1">Live Account ID</label>
-              <input
-                type="text"
-                value={settings.ib_live_account_id || ''}
-                onChange={(e) => setSettings({ ...settings, ib_live_account_id: e.target.value })}
-                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-                placeholder="e.g. U1234567"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-muted mb-1">Live Consumer Key {settings.hasIbLiveKey && <span className="text-green ml-1">✓ Set</span>}</label>
-              <input
-                type="password"
-                value={ibLiveConsumerKey}
-                onChange={(e) => setIbLiveConsumerKey(e.target.value)}
-                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-                placeholder={settings.hasIbLiveKey ? '••••••••' : 'Paste consumer key'}
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-muted mb-1">Live Signing Key (PEM) {settings.hasIbLivePrivateKey && <span className="text-green ml-1">✓ Set</span>}</label>
-              <textarea
-                value={ibLivePrivateKey}
-                onChange={(e) => setIbLivePrivateKey(e.target.value)}
-                rows={3}
-                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent resize-y"
-                placeholder={settings.hasIbLivePrivateKey ? '••••••••' : 'Paste PEM private key'}
-              />
-            </div>
-          </div>
-        )}
-
-        <button
-          onClick={saveApiConfig}
-          disabled={saving}
-          className="mt-6 px-5 py-2 bg-accent text-background text-sm font-semibold rounded hover:bg-accent/90 transition-colors disabled:opacity-50"
-        >
-          {saving ? 'Saving...' : 'Save Credentials'}
-        </button>
-        {apiMsg && (
-          <span className={`ml-3 text-sm ${apiMsg === 'Saved' ? 'text-green' : 'text-red'}`}>{apiMsg}</span>
-        )}
       </div>
 
       {/* IP Allowlist */}
