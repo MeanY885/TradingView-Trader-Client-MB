@@ -104,11 +104,12 @@ function buildCaddyConfig(domain: string) {
             listen: [':443'],
             routes: [
               {
+                match: [{ host: [domain], path: gatewayPaths }],
+                handle: [gatewayProxyHandler],
+              },
+              {
                 match: [{ host: [domain] }],
-                handle: [{
-                  handler: 'subroute',
-                  routes,
-                }],
+                handle: [appProxyHandler],
               },
             ],
           },
