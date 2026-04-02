@@ -49,6 +49,12 @@ export async function GET() {
 
         const enriched: Record<string, unknown> = { ...trade };
 
+        // When broker market data is unavailable (e.g. paper account without subscriptions),
+        // fall back to entry price so the dashboard isn't blank.
+        if (!pricingData) {
+          enriched.current_price = trade.entry_price;
+        }
+
         if (pricingData) {
           const ask = pricingData.ask;
           const bid = pricingData.bid;
