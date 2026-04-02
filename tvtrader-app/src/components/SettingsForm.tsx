@@ -89,7 +89,6 @@ export default function SettingsForm() {
   // IB gateway status
   const [ibGatewayStatus, setIbGatewayStatus] = useState<{ authenticated: boolean; connected: boolean; competing?: boolean; message?: string } | null>(null);
   const [ibStatusChecking, setIbStatusChecking] = useState(false);
-  const [ibShowLogin, setIbShowLogin] = useState(false);
   const [brokerMsg, setBrokerMsg] = useState('');
   const [balance, setBalance] = useState(0);
   const [balanceInputs, setBalanceInputs] = useState<Record<string, string>>({});
@@ -493,35 +492,25 @@ export default function SettingsForm() {
                 <label className="block text-xs text-muted uppercase tracking-wider">Gateway Login</label>
                 <button
                   type="button"
-                  onClick={() => setIbShowLogin(!ibShowLogin)}
+                  onClick={() => {
+                    // Open gateway login directly via Caddy (port 5001) — avoids proxy rewriting issues
+                    const gatewayUrl = `${window.location.protocol}//${window.location.hostname}:5001`;
+                    window.open(gatewayUrl, '_blank', 'noopener');
+                  }}
                   className={`px-4 py-1.5 text-xs font-semibold rounded transition-colors ${
-                    ibShowLogin
-                      ? 'bg-card-border text-foreground hover:bg-card-border/80'
-                      : ibGatewayStatus?.authenticated
-                        ? 'bg-background border border-card-border text-muted hover:border-accent'
-                        : 'bg-accent text-background hover:bg-accent/90'
+                    ibGatewayStatus?.authenticated
+                      ? 'bg-background border border-card-border text-muted hover:border-accent'
+                      : 'bg-accent text-background hover:bg-accent/90'
                   }`}
                 >
-                  {ibShowLogin ? 'Hide Login' : ibGatewayStatus?.authenticated ? 'Re-authenticate' : 'Log In to Gateway'}
+                  {ibGatewayStatus?.authenticated ? 'Re-authenticate' : 'Log In to Gateway'}
                 </button>
               </div>
-              {ibShowLogin && (
-                <div className="rounded-lg border border-card-border overflow-hidden" style={{ height: '520px' }}>
-                  <iframe
-                    src="/api/ib-gateway"
-                    className="w-full h-full bg-white"
-                    title="IB Gateway Login"
-                    sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-                  />
-                </div>
-              )}
-              {!ibShowLogin && (
-                <p className="text-xs text-muted">
-                  {ibGatewayStatus?.authenticated
-                    ? 'Session is active. It will be kept alive automatically. IB requires re-login approximately once per day during scheduled maintenance.'
-                    : 'Click the button above to open the IB login form. You will need your IB username, password, and 2FA device.'}
-                </p>
-              )}
+              <p className="text-xs text-muted">
+                {ibGatewayStatus?.authenticated
+                  ? 'Session is active. It will be kept alive automatically. IB requires re-login approximately once per day during scheduled maintenance.'
+                  : 'Opens the IB gateway login in a new tab. Log in with your IB credentials and 2FA, then click Refresh above to confirm.'}
+              </p>
             </div>
           </div>
         )}

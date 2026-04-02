@@ -10,3 +10,12 @@
         header_up X-Real-IP {remote_host}
     }
 }
+
+# IB Client Portal Gateway — direct access for login (no proxy rewriting needed)
+:5001 {
+    reverse_proxy ib-gateway:5000 {
+        transport http {
+            tls_insecure_skip_verify
+        }
+    }
+}
