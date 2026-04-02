@@ -496,7 +496,7 @@ export default function SettingsForm() {
                     // Open gateway login in user's browser.
                     // The gateway is exposed on port 5000 of the same host.
                     // We use the current hostname so it works from any client.
-                    const gwLoginUrl = `http://${window.location.hostname}:5000/sso/Login?forwardTo=22&RL=1&ip2loc=US`;
+                    const gwLoginUrl = `https://${window.location.hostname}:5000/sso/Login?forwardTo=22&RL=1&ip2loc=US`;
                     window.open(gwLoginUrl, '_blank', 'noopener');
                   }}
                   className={`px-4 py-1.5 text-xs font-semibold rounded transition-colors ${
