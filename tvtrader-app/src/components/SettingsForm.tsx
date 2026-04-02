@@ -206,7 +206,7 @@ export default function SettingsForm() {
       if (practiceKey.trim()) data.practice_api_key = practiceKey.trim();
       if (liveKey.trim()) data.live_api_key = liveKey.trim();
     } else if (broker === 'interactive_brokers') {
-      data.ib_gateway_url = settings.ib_gateway_url || 'https://localhost:5000';
+      data.ib_gateway_url = settings.ib_gateway_url || 'http://localhost:5000';
       data.ib_account_id = settings.ib_account_id || '';
     }
 
@@ -477,12 +477,12 @@ export default function SettingsForm() {
               <div className="mt-2">
                 <input
                   type="text"
-                  value={settings.ib_gateway_url || 'https://localhost:5000'}
+                  value={settings.ib_gateway_url || 'http://localhost:5000'}
                   onChange={(e) => setSettings({ ...settings, ib_gateway_url: e.target.value })}
                   className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-                  placeholder="https://localhost:5000"
+                  placeholder="http://localhost:5000"
                 />
-                <p className="text-xs text-muted mt-1">Default: https://ib-gateway:5000 in Docker. Only change if you run the gateway elsewhere.</p>
+                <p className="text-xs text-muted mt-1">Default: http://ib-gateway:5000 in Docker. Only change if you run the gateway elsewhere.</p>
               </div>
             </details>
 
@@ -493,10 +493,9 @@ export default function SettingsForm() {
                 <button
                   type="button"
                   onClick={() => {
-                    // Open gateway login directly on port 5000 (self-signed cert)
-                    // The gateway login page requires direct access — cookies are domain-bound
-                    const gwUrl = `https://${window.location.hostname}:5000`;
-                    window.open(gwUrl, '_blank', 'noopener');
+                    // Open gateway login through Caddy reverse proxy (same origin)
+                    // Gateway runs on HTTP internally; Caddy handles SSL
+                    window.open('/sso/Login?forwardTo=22&RL=1&ip2loc=US', '_blank', 'noopener');
                   }}
                   className={`px-4 py-1.5 text-xs font-semibold rounded transition-colors ${
                     ibGatewayStatus?.authenticated
@@ -510,7 +509,7 @@ export default function SettingsForm() {
               <p className="text-xs text-muted">
                 {ibGatewayStatus?.authenticated
                   ? 'Session is active. It will be kept alive automatically. IB requires re-login approximately once per day during scheduled maintenance.'
-                  : 'Opens the IB gateway login in a new tab. Accept the security warning (self-signed cert), log in with your IB credentials and 2FA, then click Refresh above.'}
+                  : 'Opens the IB gateway login in a new tab. Log in with your IB credentials and 2FA, then click Refresh above.'}
               </p>
             </div>
           </div>

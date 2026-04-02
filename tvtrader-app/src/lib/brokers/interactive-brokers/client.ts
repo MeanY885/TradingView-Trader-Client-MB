@@ -13,7 +13,7 @@ import { BrokerError, BrokerAuthError, BrokerConnectionError } from '../errors';
 import { ibGatewayFetch } from './gateway-fetch';
 
 export interface IBClientConfig {
-  gatewayUrl: string;  // e.g. https://localhost:5000 or https://ib-gateway:5000
+  gatewayUrl: string;  // e.g. http://localhost:5000 or http://ib-gateway:5000
   accountId: string;
 }
 

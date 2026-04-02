@@ -66,10 +66,6 @@ function buildCaddyConfig(domain: string) {
   const gatewayProxyHandler = {
     handler: 'reverse_proxy',
     upstreams: [{ dial: 'ib-gateway:5000' }],
-    transport: {
-      protocol: 'http',
-      tls: { insecure_skip_verify: true },
-    },
   };
 
   // Gateway paths that don't overlap with app routes
