@@ -23,6 +23,6 @@
           index: "index.html"
     ips:
       allow:
-        - "*"
+        - ".*"
       deny:
         - ""
