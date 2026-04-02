@@ -4,22 +4,19 @@
     }
 }
 
+# Main app
 :80 {
-    # IB Client Portal Gateway — served directly for login page
-    @iblogin path /ib-login /ib-login/*
-    handle @iblogin {
-        uri strip_prefix /ib-login
-        reverse_proxy ib-gateway:5000 {
-            transport http {
-                tls_insecure_skip_verify
-            }
-        }
+    reverse_proxy app:2000 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Real-IP {remote_host}
     }
+}
 
-    handle {
-        reverse_proxy app:2000 {
-            header_up X-Forwarded-For {remote_host}
-            header_up X-Real-IP {remote_host}
+# IB Client Portal Gateway — separate subdomain so login page paths resolve naturally
+http://ib.oanda.onlinesolution24.com {
+    reverse_proxy ib-gateway:5000 {
+        transport http {
+            tls_insecure_skip_verify
         }
     }
 }
