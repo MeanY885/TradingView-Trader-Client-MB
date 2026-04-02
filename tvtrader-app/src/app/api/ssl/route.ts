@@ -50,7 +50,7 @@ function tlsProbe(domain: string): Promise<{
 }
 
 function buildCaddyConfig(domain: string) {
-  const proxyHandler = {
+  const appProxyHandler = {
     handler: 'reverse_proxy',
     upstreams: [{ dial: 'app:2000' }],
     headers: {
@@ -62,22 +62,53 @@ function buildCaddyConfig(domain: string) {
       },
     },
   };
+
+  const gatewayProxyHandler = {
+    handler: 'reverse_proxy',
+    upstreams: [{ dial: 'ib-gateway:5000' }],
+    transport: {
+      protocol: 'http',
+      tls: { insecure_skip_verify: true },
+    },
+  };
+
+  // Gateway paths that don't overlap with app routes
+  const gatewayPaths = [
+    '/sso/*', '/ssodh/*', '/oauth/*', '/portal/*', '/portal.proxy/*',
+    '/tickle', '/demo/*', '/credential.recovery/*',
+    '/css/*', '/scripts/*', '/images/*', '/lib/*', '/en/*', '/fonts/*',
+  ];
+
+  // Route: gateway paths → ib-gateway, everything else → app
+  const routes = [
+    {
+      match: [{ path: gatewayPaths }],
+      handle: [gatewayProxyHandler],
+    },
+    {
+      handle: [appProxyHandler],
+    },
+  ];
+
   return {
     apps: {
       http: {
         servers: {
-          // HTTP — always serves the app directly (no redirect, so IP access keeps working)
+          // HTTP — serves both app and gateway (no redirect, so IP access keeps working)
           http: {
             listen: [':80'],
-            routes: [{ handle: [proxyHandler] }],
+            routes,
           },
-          // HTTPS — serves the app for the configured domain with TLS
+          // HTTPS — serves both app and gateway for the configured domain with TLS
           https: {
             listen: [':443'],
             routes: [
               {
                 match: [{ host: [domain] }],
-                handle: [proxyHandler],
+                handle: [{
+                  handler: 'subroute',
+                  routes,
+                }],
               },
             ],
           },
