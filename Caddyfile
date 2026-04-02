@@ -1,0 +1,12 @@
+{
+    admin 0.0.0.0:2019 {
+        origins caddy:2019 localhost:2019 127.0.0.1:2019
+    }
+}
+
+:80 {
+    reverse_proxy app:2000 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Real-IP {remote_host}
+    }
+}

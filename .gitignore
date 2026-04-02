@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+
+# Environment files (contain secrets)
+.env
+.env.local
+.env*.local
+tvtrader-app/.env
+
+# Docker image archives
+*.tar.gz
+
+# macOS
+.DS_Store
+
+# Database dumps (contain tokens)
+*.sql
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# TypeScript build artifacts
+tsconfig.tsbuildinfo
+tvtrader-app/tsconfig.tsbuildinfo
