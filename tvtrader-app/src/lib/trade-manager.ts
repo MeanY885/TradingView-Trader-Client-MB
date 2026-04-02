@@ -240,7 +240,9 @@ export async function handleBuySell(signal: WebhookSignal): Promise<{ success: b
   }
 
   const tradeId = orderResult!.brokerTradeId!;
-  const fillPrice = orderResult!.fillPrice!;
+  // IB fills asynchronously — fillPrice may not be available immediately.
+  // Fall back to signal entry price for the initial record; sync will update later.
+  const fillPrice = orderResult!.fillPrice ?? entryPrice;
   const slippage = (direction === 'buy'
     ? calcPips(fillPrice, entryPrice, signal.instrument)
     : calcPips(entryPrice, fillPrice, signal.instrument)).toFixed(1);
