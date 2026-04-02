@@ -22,10 +22,19 @@ const ALLOWED_PREFIXES = [
   '/sso/',
   '/v1/api/',
   '/portal/',
+  '/portal.proxy/',
   '/proxy/',
   '/oauth/',
   '/ssodh/',
   '/tickle',
+  // Static assets served by the gateway login page
+  '/css/',
+  '/scripts/',
+  '/images/',
+  '/lib/',
+  '/en/',
+  '/demo/',
+  '/credential.recovery/',
 ];
 
 function isAllowedPath(path: string): boolean {
@@ -82,7 +91,11 @@ async function proxyRequest(request: NextRequest, method: string) {
     // Rewrite Location headers for redirects
     const location = res.headers.get('location');
     if (location) {
-      const rewritten = location.replace(gatewayUrl, '/api/ib-gateway');
+      let rewritten = location.replace(gatewayUrl, '/api/ib-gateway');
+      // Gateway returns relative paths like /sso/Login — prefix with /api/ib-gateway
+      if (rewritten.startsWith('/') && !rewritten.startsWith('/api/ib-gateway')) {
+        rewritten = '/api/ib-gateway' + rewritten;
+      }
       responseHeaders.set('location', rewritten);
     }
 
@@ -97,7 +110,25 @@ async function proxyRequest(request: NextRequest, method: string) {
         /https:\/\/localhost:5000/g,
         '/api/ib-gateway',
       );
+      // Inject <base> tag so all relative URLs resolve through our proxy
+      html = html.replace(
+        '<head>',
+        '<head><base href="/api/ib-gateway/">',
+      );
       return new NextResponse(html, {
+        status: res.status,
+        headers: responseHeaders,
+      });
+    }
+
+    // For CSS responses, rewrite url() references to absolute paths
+    if (ct.includes('text/css')) {
+      let css = new TextDecoder().decode(responseBody);
+      css = css.replace(
+        /url\(\s*['"]?\/(?!api\/ib-gateway)/g,
+        "url('/api/ib-gateway/",
+      );
+      return new NextResponse(css, {
         status: res.status,
         headers: responseHeaders,
       });

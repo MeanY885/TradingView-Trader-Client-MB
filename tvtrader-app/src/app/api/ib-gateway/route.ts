@@ -30,9 +30,13 @@ export async function GET(request: NextRequest) {
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location');
       if (location) {
-        const rewritten = location
+        let rewritten = location
           .replace(gatewayUrl, '/api/ib-gateway')
           .replace(/https:\/\/localhost:5000/g, '/api/ib-gateway');
+        // Gateway returns relative paths like /sso/Login — prefix with /api/ib-gateway
+        if (rewritten.startsWith('/') && !rewritten.startsWith('/api/ib-gateway')) {
+          rewritten = '/api/ib-gateway' + rewritten;
+        }
         responseHeaders.set('location', rewritten);
       }
       return new NextResponse(null, { status: res.status, headers: responseHeaders });
