@@ -30,7 +30,7 @@ import { IBAuthManager } from './auth';
 import { IBKeepalive } from './keepalive';
 import { getSettings } from '../../db';
 
-const DEFAULT_GATEWAY_URL = process.env.IB_GATEWAY_URL || 'https://localhost:5000';
+const DEFAULT_GATEWAY_URL = process.env.IB_GATEWAY_URL || 'http://localhost:5000';
 
 export class IBAdapter implements BrokerAdapter {
   readonly brokerName = 'interactive_brokers' as const;

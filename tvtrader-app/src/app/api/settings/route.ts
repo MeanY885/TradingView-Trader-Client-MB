@@ -91,7 +91,7 @@ export async function GET() {
       hasPracticeKey,
       hasLiveKey,
       // IB gateway fields (not secrets — just a URL and account ID)
-      ib_gateway_url: raw.ib_gateway_url || process.env.IB_GATEWAY_URL || 'https://localhost:5000',
+      ib_gateway_url: raw.ib_gateway_url || process.env.IB_GATEWAY_URL || 'http://localhost:5000',
       ib_account_id: raw.ib_account_id || '',
     });
   } catch (e) {
@@ -197,8 +197,8 @@ export async function PUT(request: Request) {
 
       if (key === 'ib_gateway_url') {
         const v = String(value).trim();
-        if (v && !v.startsWith('https://')) {
-          return NextResponse.json({ error: 'ib_gateway_url must start with https://' }, { status: 400 });
+        if (v && !v.startsWith('http://') && !v.startsWith('https://')) {
+          return NextResponse.json({ error: 'ib_gateway_url must start with http:// or https://' }, { status: 400 });
         }
       }
 
@@ -226,7 +226,7 @@ export async function PUT(request: Request) {
       live_account_id: updated.live_account_id || process.env.OANDA_ACCOUNT_ID_LIVE || '',
       hasPracticeKey,
       hasLiveKey,
-      ib_gateway_url: updated.ib_gateway_url || process.env.IB_GATEWAY_URL || 'https://localhost:5000',
+      ib_gateway_url: updated.ib_gateway_url || process.env.IB_GATEWAY_URL || 'http://localhost:5000',
       ib_account_id: updated.ib_account_id || '',
     });
   } catch (e) {

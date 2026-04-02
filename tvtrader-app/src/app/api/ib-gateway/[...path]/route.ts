@@ -15,7 +15,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSettings } from '../../../../lib/db';
 import { ibGatewayFetch } from '../../../../lib/brokers/interactive-brokers/gateway-fetch';
 
-const DEFAULT_GATEWAY_URL = process.env.IB_GATEWAY_URL || 'https://localhost:5000';
+const DEFAULT_GATEWAY_URL = process.env.IB_GATEWAY_URL || 'http://localhost:5000';
 
 // Allowed path prefixes that we'll proxy to the gateway
 const ALLOWED_PREFIXES = [
