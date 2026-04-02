@@ -493,9 +493,9 @@ export default function SettingsForm() {
                 <button
                   type="button"
                   onClick={() => {
-                    // Open gateway login through Caddy reverse proxy (same origin)
-                    // Gateway runs on HTTP internally; Caddy handles SSL
-                    window.open('/sso/Login?forwardTo=22&RL=1&ip2loc=US', '_blank', 'noopener');
+                    // Open gateway login directly on the IB gateway
+                    const gwUrl = (settings.ib_gateway_url || 'http://localhost:5000').replace(/\/+$/, '');
+                    window.open(`${gwUrl}/sso/Login?forwardTo=22&RL=1&ip2loc=US`, '_blank', 'noopener');
                   }}
                   className={`px-4 py-1.5 text-xs font-semibold rounded transition-colors ${
                     ibGatewayStatus?.authenticated
