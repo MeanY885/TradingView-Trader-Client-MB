@@ -493,8 +493,8 @@ export default function SettingsForm() {
                 <button
                   type="button"
                   onClick={() => {
-                    // Open gateway login directly via Caddy (port 5001) — avoids proxy rewriting issues
-                    const gatewayUrl = `${window.location.protocol}//${window.location.hostname}:5001`;
+                    // Open gateway login directly via Caddy path — avoids proxy rewriting issues
+                    const gatewayUrl = `${window.location.origin}/ib-login/`;
                     window.open(gatewayUrl, '_blank', 'noopener');
                   }}
                   className={`px-4 py-1.5 text-xs font-semibold rounded transition-colors ${
