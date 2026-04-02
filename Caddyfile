@@ -4,19 +4,23 @@
     }
 }
 
-# Main app
 :80 {
-    reverse_proxy app:2000 {
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Real-IP {remote_host}
+    # IB Client Portal Gateway — route gateway-specific paths directly
+    # These paths don't overlap with app routes (/api/*, /settings, /signals, etc.)
+    @gateway path /sso/* /ssodh/* /oauth/* /portal/* /portal.proxy/* /tickle /demo/* /credential.recovery/* /css/* /scripts/* /images/* /lib/* /en/* /fonts/*
+    handle @gateway {
+        reverse_proxy ib-gateway:5000 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
     }
-}
 
-# IB Client Portal Gateway — separate subdomain so login page paths resolve naturally
-http://ib.oanda.onlinesolution24.com {
-    reverse_proxy ib-gateway:5000 {
-        transport http {
-            tls_insecure_skip_verify
+    # Everything else goes to the Next.js app
+    handle {
+        reverse_proxy app:2000 {
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Real-IP {remote_host}
         }
     }
 }

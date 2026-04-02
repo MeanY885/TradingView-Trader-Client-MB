@@ -493,9 +493,8 @@ export default function SettingsForm() {
                 <button
                   type="button"
                   onClick={() => {
-                    // Open gateway login on dedicated subdomain — no proxy rewriting needed
-                    const gatewayUrl = `${window.location.protocol}//ib.${window.location.hostname}`;
-                    window.open(gatewayUrl, '_blank', 'noopener');
+                    // Open gateway login — Caddy routes /sso/* directly to the gateway
+                    window.open(`${window.location.origin}/sso/Login?forwardTo=22&RL=1&ip2loc=US`, '_blank', 'noopener');
                   }}
                   className={`px-4 py-1.5 text-xs font-semibold rounded transition-colors ${
                     ibGatewayStatus?.authenticated
