@@ -35,7 +35,7 @@ export const INSTRUMENTS: Record<string, InstrumentConfig> = {
     pipSize: 0.0001,
     precision: 5,
     oanda: 'EUR_USD',
-    ib: { conid: 12087792, symbol: 'EUR', exchange: 'IDEALPRO', currency: 'USD', secType: 'CASH' },
+    ib: { conid: 143916318, symbol: 'EUR', exchange: 'SMART', currency: 'USD', secType: 'CFD' },
   },
   XAU_USD: {
     canonical: 'XAU_USD',
@@ -51,7 +51,7 @@ export const INSTRUMENTS: Record<string, InstrumentConfig> = {
     pipSize: 0.01,
     precision: 3,
     oanda: 'NZD_JPY',
-    ib: { conid: 15016233, symbol: 'NZD', exchange: 'IDEALPRO', currency: 'JPY', secType: 'CASH' },
+    ib: { conid: 230949943, symbol: 'NZD', exchange: 'SMART', currency: 'JPY', secType: 'CFD' },
   },
 };
 

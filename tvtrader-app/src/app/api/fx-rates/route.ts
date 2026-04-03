@@ -36,8 +36,11 @@ export async function GET(request: Request) {
     }
 
     // Convert: for each currency, how many units of ccy = 1 unit of that currency
-    const get = (instrument: string) => map[instrument];
-    const inv = (instrument: string) => 1 / map[instrument];
+    const get = (instrument: string) => map[instrument] || 0;
+    const inv = (instrument: string) => {
+      const v = map[instrument];
+      return v && v > 0 ? 1 / v : 0;
+    };
 
     let rates: Record<string, number>;
 
@@ -86,6 +89,18 @@ export async function GET(request: Request) {
         if (quote === ccy) rates[base] = val;
         if (base === ccy) rates[quote] = 1 / val;
       }
+    }
+
+    // Fill missing rates with fallback estimates via cross rates
+    const FALLBACK: Record<string, Record<string, number>> = {
+      GBP: { USD: 0.79, EUR: 0.857, JPY: 0.0051, NZD: 0.457, XAU: 2400 },
+      USD: { GBP: 1.27, EUR: 0.92, JPY: 0.0067, NZD: 0.614, XAU: 3000 },
+      EUR: { USD: 1.09, GBP: 1.17, JPY: 0.0062, NZD: 0.565, XAU: 2750 },
+      JPY: { USD: 0.0067, GBP: 0.0084, EUR: 0.0062, NZD: 0.0041, XAU: 20.1 },
+    };
+    const fb = FALLBACK[ccy] ?? {};
+    for (const [k, v] of Object.entries(rates)) {
+      if (!v || !isFinite(v)) rates[k] = fb[k] ?? 0;
     }
 
     return NextResponse.json({ base: ccy, ...rates });

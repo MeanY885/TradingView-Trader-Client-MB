@@ -38,6 +38,8 @@ export class IBAdapter implements BrokerAdapter {
   private authManager: IBAuthManager | null = null;
   private keepalive: IBKeepalive | null = null;
   private connected = false;
+  /** Conids that have been primed (first snapshot call subscribes to data) */
+  private primedConids = new Set<number>();
 
   async connect(): Promise<void> {
     if (this.connected) return;
@@ -67,6 +69,9 @@ export class IBAdapter implements BrokerAdapter {
     try {
       await this.authManager.ensureAuthenticated();
       console.log(`[IB] Connected and authenticated via gateway at ${gatewayUrl} (account: ${accountId})`);
+      // Suppress common order warnings that block bracket order placement
+      await this.client.suppressOrderWarnings();
+      console.log(`[IB] Order warnings suppressed`);
     } catch (e) {
       console.warn(`[IB] Connected to gateway at ${gatewayUrl} but NOT authenticated. User must log in via the gateway. Error: ${e}`);
     }
@@ -128,52 +133,133 @@ export class IBAdapter implements BrokerAdapter {
 
   // --- Pricing ---
 
+  private parseSnapshot(instrument: string, snap: Record<string, unknown>): PriceQuote | null {
+    const bid = parseFloat(String(snap['84'] || '0'));
+    const ask = parseFloat(String(snap['86'] || '0'));
+    if (bid > 0 && ask > 0) {
+      return { instrument, ask, bid };
+    }
+    // Fall back to Last Price if bid/ask aren't available
+    const last = parseFloat(String(snap['31'] || '0'));
+    if (last > 0) {
+      const spreadFactor = instrument === 'XAU_USD' ? 0.0003 : 0.00005;
+      const halfSpread = last * spreadFactor;
+      return { instrument, ask: last + halfSpread, bid: last - halfSpread };
+    }
+    return null;
+  }
+
   async getPricing(instrument: string): Promise<PriceQuote> {
+    const config = INSTRUMENTS[instrument];
+    if (!config) {
+      throw new BrokerError(`Unknown instrument ${instrument}`, 'interactive_brokers', 'INVALID_PRICE', true);
+    }
+
     const client = this.getClient();
-    const config = this.getIBInstrument(instrument);
-    // Fields: 84=Bid, 86=Ask
+    const conid = config.ib.conid;
+    const needsPriming = !this.primedConids.has(conid);
+
+    // Fields: 31=Last, 84=Bid, 86=Ask
     // IB's snapshot API requires priming — the first call subscribes to the data
-    // and often returns zeros. Retry up to 3 times with a short delay.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const snapshots = await client.getMarketDataSnapshot([config.ib.conid], ['84', '86']);
-      const snap = snapshots[0];
-      if (!snap) {
-        throw new BrokerError(`No market data for ${instrument}`, 'interactive_brokers', 'NO_MARKET_DATA', true);
+    // and often returns zeros. On first call, retry a few times. After that, single call.
+    const maxAttempts = needsPriming ? 5 : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const snapshots = await client.getMarketDataSnapshot([conid], ['31', '84', '86']);
+        const snap = snapshots[0];
+        if (snap) {
+          console.log(`[IB] Snapshot for ${instrument} (attempt ${attempt + 1}/${maxAttempts}):`, JSON.stringify(snap));
+          const quote = this.parseSnapshot(instrument, snap);
+          if (quote) {
+            this.primedConids.add(conid);
+            return quote;
+          }
+        } else {
+          console.warn(`[IB] No snapshot returned for ${instrument} (attempt ${attempt + 1}/${maxAttempts}), raw:`, JSON.stringify(snapshots));
+        }
+      } catch (e) {
+        console.error(`[IB] Snapshot error for ${instrument} (attempt ${attempt + 1}/${maxAttempts}):`, e);
       }
-
-      const bid = parseFloat(String(snap['84'] || '0'));
-      const ask = parseFloat(String(snap['86'] || '0'));
-
-      if (bid > 0 && ask > 0) {
-        return { instrument, ask, bid };
-      }
-
-      // Wait before retrying to let IB populate the data
-      if (attempt < 2) {
-        await new Promise((r) => setTimeout(r, 1000));
+      if (attempt < maxAttempts - 1) {
+        await new Promise((r) => setTimeout(r, 500));
       }
     }
 
-    throw new BrokerError(`Invalid pricing for ${instrument} after retries`, 'interactive_brokers', 'INVALID_PRICE', true);
+    // Fallback: use mktPrice from the open position for this conid
+    try {
+      const positions = await client.getPositions();
+      console.log(`[IB] Positions fallback for ${instrument} — found ${positions.length} positions:`, JSON.stringify(positions.map(p => ({ conid: p.conid, mktPrice: p.mktPrice, position: p.position }))));
+      const pos = positions.find((p) => p.conid === conid);
+      if (pos && pos.mktPrice > 0) {
+        const price = pos.mktPrice;
+        const spreadFactor = instrument === 'XAU_USD' ? 0.0003 : 0.00005;
+        const halfSpread = price * spreadFactor;
+        console.log(`[IB] Using position mktPrice for ${instrument}: ${price.toFixed(5)}`);
+        return { instrument, ask: price + halfSpread, bid: price - halfSpread };
+      }
+    } catch (e) {
+      console.warn(`[IB] Position fallback failed for ${instrument}:`, e);
+    }
+
+    throw new BrokerError(`No pricing available for ${instrument} from IB`, 'interactive_brokers', 'INVALID_PRICE', true);
   }
 
   async getPricingMulti(instruments: string[]): Promise<PriceQuote[]> {
     const client = this.getClient();
-    const configs = instruments.map((inst) => ({
-      canonical: inst,
-      config: this.getIBInstrument(inst),
-    }));
-    const conids = configs.map((c) => c.config.ib.conid);
+    const registered = instruments.filter((inst) => INSTRUMENTS[inst]);
 
-    const snapshots = await client.getMarketDataSnapshot(conids, ['84', '86']);
-    const snapMap = new Map(snapshots.map((s) => [s.conid, s]));
+    const results = new Map<string, PriceQuote>();
 
-    return configs.map(({ canonical, config }) => {
-      const snap = snapMap.get(config.ib.conid);
-      const bid = snap ? parseFloat(String(snap['84'] || '0')) : 0;
-      const ask = snap ? parseFloat(String(snap['86'] || '0')) : 0;
-      return { instrument: canonical, ask, bid };
-    });
+    if (registered.length > 0) {
+      const configs = registered.map((inst) => ({
+        canonical: inst,
+        config: this.getIBInstrument(inst),
+      }));
+      const conids = configs.map((c) => c.config.ib.conid);
+      const snapshots = await client.getMarketDataSnapshot(conids, ['31', '84', '86']);
+      const snapMap = new Map(snapshots.map((s) => [s.conid, s]));
+
+      for (const { canonical, config } of configs) {
+        const snap = snapMap.get(config.ib.conid);
+        if (!snap) continue;
+        const bid = parseFloat(String(snap['84'] || '0'));
+        const ask = parseFloat(String(snap['86'] || '0'));
+        if (bid > 0 && ask > 0) {
+          results.set(canonical, { instrument: canonical, ask, bid });
+          continue;
+        }
+        const last = parseFloat(String(snap['31'] || '0'));
+        if (last > 0) {
+          const spreadFactor = canonical === 'XAU_USD' ? 0.0003 : 0.00005;
+          const halfSpread = last * spreadFactor;
+          results.set(canonical, { instrument: canonical, ask: last + halfSpread, bid: last - halfSpread });
+        }
+      }
+    }
+
+    // Fallback: use position mktPrice for any missing instruments
+    const missing = instruments.filter((inst) => !results.has(inst));
+    if (missing.length > 0) {
+      try {
+        const positions = await client.getPositions();
+        for (const inst of missing) {
+          const config = INSTRUMENTS[inst];
+          if (!config) continue;
+          const pos = positions.find((p) => p.conid === config.ib.conid);
+          if (pos && pos.mktPrice > 0) {
+            const spreadFactor = inst === 'XAU_USD' ? 0.0003 : 0.00005;
+            const halfSpread = pos.mktPrice * spreadFactor;
+            results.set(inst, { instrument: inst, ask: pos.mktPrice + halfSpread, bid: pos.mktPrice - halfSpread });
+          }
+        }
+      } catch (e) {
+        console.warn('[IB] Position fallback in getPricingMulti failed:', e);
+      }
+    }
+
+    return instruments.map((inst) =>
+      results.get(inst) || { instrument: inst, ask: 0, bid: 0 }
+    );
   }
 
   // --- Trades ---
@@ -193,7 +279,25 @@ export class IBAdapter implements BrokerAdapter {
     const positions = await client.getPositions();
     const pos = positions.find((p) => String(p.conid) === brokerTradeId);
     if (pos && pos.position !== 0) {
-      return this.positionToBrokerTrade(pos);
+      const trade = this.positionToBrokerTrade(pos);
+      // IB's position unrealizedPnl is cached and stale — compute from live pricing
+      // and convert to account currency so the rest of the app gets real-time P/L
+      // in the same format Oanda provides natively.
+      const instrument = this.conidToCanonical(pos.conid);
+      if (instrument) {
+        try {
+          const pricing = await this.getPricing(instrument);
+          const mid = (pricing.ask + pricing.bid) / 2;
+          const rawPL = (mid - pos.avgPrice) * pos.position;
+          // Convert from quote currency to account currency
+          const { convertToAccountCurrency } = await import('../../currency');
+          const settings = await getSettings();
+          const quoteCcy = instrument.split('_')[1];
+          const acctCcy = settings.account_currency || 'GBP';
+          trade.unrealizedPL = await convertToAccountCurrency(rawPL, quoteCcy, acctCcy);
+        } catch { /* keep IB's cached value as fallback */ }
+      }
+      return trade;
     }
 
     // Check executions for closed trade
@@ -262,23 +366,27 @@ export class IBAdapter implements BrokerAdapter {
     const config = this.getIBInstrument(instrument);
     const side = units >= 0 ? 'BUY' : 'SELL';
     const quantity = Math.abs(units);
+    const conid = config.ib.conid;
+    // IB order API requires secType as "conid:TYPE" format
+    const secTypeStr = `${conid}:${config.ib.secType}`;
 
     // Build bracket order: parent market + TP limit + SL stop
+    const parentCOID = `parent_${Date.now()}`;
     const parentOrder: IBOrderRequest = {
-      conid: config.ib.conid,
-      secType: config.ib.secType,
+      conid,
+      secType: secTypeStr,
       orderType: 'MKT',
       side,
       quantity,
       tif: 'GTC',
       listingExchange: config.ib.exchange,
-      cOID: `parent_${Date.now()}`,
+      cOID: parentCOID,
     };
 
     const tpSide = side === 'BUY' ? 'SELL' : 'BUY';
     const tpOrder: IBOrderRequest = {
-      conid: config.ib.conid,
-      secType: config.ib.secType,
+      conid,
+      secType: secTypeStr,
       orderType: 'LMT',
       side: tpSide,
       quantity,
@@ -286,26 +394,29 @@ export class IBAdapter implements BrokerAdapter {
       tif: 'GTC',
       listingExchange: config.ib.exchange,
       cOID: `tp_${Date.now()}`,
-      parentId: parentOrder.cOID,
+      parentId: parentCOID,
     };
 
     const slOrder: IBOrderRequest = {
-      conid: config.ib.conid,
-      secType: config.ib.secType,
+      conid,
+      secType: secTypeStr,
       orderType: 'STP',
       side: tpSide,
       quantity,
-      auxPrice: stopLossPrice,
+      price: stopLossPrice,
       tif: 'GTC',
       listingExchange: config.ib.exchange,
       cOID: `sl_${Date.now()}`,
-      parentId: parentOrder.cOID,
+      parentId: parentCOID,
     };
 
     let response: IBOrderResponse[];
     try {
+      console.log(`[IB] Bracket order payload:`, JSON.stringify({ orders: [parentOrder, tpOrder, slOrder] }));
       response = await client.placeBracketOrder([parentOrder, tpOrder, slOrder]);
+      console.log(`[IB] Bracket order response:`, JSON.stringify(response));
     } catch (e) {
+      console.error(`[IB] Bracket order failed:`, e);
       if (e instanceof BrokerError && e.message.includes('margin')) {
         throw new InsufficientMarginError('interactive_brokers', e);
       }
@@ -313,70 +424,62 @@ export class IBAdapter implements BrokerAdapter {
     }
 
     // Handle the IB confirmation flow — gateway may return a prompt requiring reply
-    const result = await this.handleOrderResponse(client, response);
-    return result;
+    await this.handleOrderConfirmations(client, response);
+
+    // Use conid as brokerTradeId — all position lookups use conid
+    // Poll briefly for fill confirmation
+    let fillPrice: number | undefined;
+    for (let i = 0; i < 5; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      const positions = await client.getPositions();
+      const pos = positions.find((p) => p.conid === conid && p.position !== 0);
+      if (pos) {
+        fillPrice = pos.avgPrice;
+        console.log(`[IB] Position confirmed for ${instrument}: ${pos.position} @ ${pos.avgPrice}`);
+        break;
+      }
+    }
+
+    return {
+      filled: true,
+      brokerTradeId: String(conid),
+      fillPrice,
+    };
   }
 
   /**
    * IB Gateway order responses may require confirmation via /iserver/reply/{replyId}.
-   * This handles the full confirmation chain.
+   * Handles the full confirmation chain (up to 3 levels deep).
    */
-  private async handleOrderResponse(
+  private async handleOrderConfirmations(
     client: IBClient,
     response: IBOrderResponse[],
-  ): Promise<OrderResult> {
-    if (!response.length) {
-      return { filled: false, rejectedReason: 'No response from IB order placement' };
-    }
+  ): Promise<void> {
+    if (!response.length) return;
 
-    const first = response[0];
-
-    // If we got an order_id, the order was accepted
-    if (first.order_id) {
-      return {
-        filled: true,
-        brokerTradeId: first.order_id,
-        fillPrice: undefined, // IB fills asynchronously
-      };
-    }
-
-    // If we got a confirmation prompt (id + message), reply to confirm
-    if (first.id && first.message) {
-      console.log(`[IB] Order requires confirmation: ${first.message.join('; ')}`);
-      try {
-        const confirmResponse = await client.confirmOrder(first.id);
-
-        // Confirmation may chain — handle recursively (max 1 level deep)
-        if (confirmResponse[0]?.order_id) {
-          return {
-            filled: true,
-            brokerTradeId: confirmResponse[0].order_id,
-            fillPrice: undefined,
-          };
+    for (const item of response) {
+      // If it's a confirmation prompt, reply to confirm
+      if (item.id && item.message) {
+        console.log(`[IB] Order requires confirmation: ${item.message.join('; ')}`);
+        try {
+          const confirmResponse = await client.confirmOrder(item.id);
+          console.log(`[IB] Confirmation response:`, JSON.stringify(confirmResponse));
+          // Handle chained confirmations
+          await this.handleOrderConfirmations(client, confirmResponse);
+        } catch (e) {
+          console.error('[IB] Order confirmation failed:', e);
         }
+      }
 
-        // Second confirmation needed (rare but possible)
-        if (confirmResponse[0]?.id && confirmResponse[0]?.message) {
-          const secondConfirm = await client.confirmOrder(confirmResponse[0].id);
-          if (secondConfirm[0]?.order_id) {
-            return {
-              filled: true,
-              brokerTradeId: secondConfirm[0].order_id,
-              fillPrice: undefined,
-            };
-          }
+      // Check for rejection
+      if (item.order_status && item.order_status.toLowerCase().includes('reject')) {
+        const reason = item.message?.join('; ') || item.order_status;
+        if (reason.toLowerCase().includes('margin')) {
+          throw new InsufficientMarginError('interactive_brokers');
         }
-      } catch (e) {
-        console.error('[IB] Order confirmation failed:', e);
+        throw new OrderRejectedError('interactive_brokers', reason);
       }
     }
-
-    const reason = first.message?.join('; ') || first.order_status || 'Unknown error';
-    if (reason.toLowerCase().includes('margin')) {
-      throw new InsufficientMarginError('interactive_brokers');
-    }
-
-    throw new OrderRejectedError('interactive_brokers', reason);
   }
 
   async closeTrade(brokerTradeId: string): Promise<CloseResult> {
@@ -392,8 +495,10 @@ export class IBAdapter implements BrokerAdapter {
 
     // Place a market order to close
     const closeSide = pos.position > 0 ? 'SELL' : 'BUY';
+    const config = Object.values(INSTRUMENTS).find((c) => c.ib.conid === pos.conid);
     const closeOrder: IBOrderRequest = {
       conid: pos.conid,
+      secType: config ? `${pos.conid}:${config.ib.secType}` : undefined,
       orderType: 'MKT',
       side: closeSide,
       quantity: Math.abs(pos.position),
@@ -404,7 +509,7 @@ export class IBAdapter implements BrokerAdapter {
     const response = await client.placeOrder(closeOrder);
 
     // Handle confirmation if needed
-    await this.handleOrderResponse(client, response);
+    await this.handleOrderConfirmations(client, response);
 
     return {
       fillPrice: pos.mktPrice || undefined,

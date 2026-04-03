@@ -88,9 +88,19 @@ export async function GET() {
           }
         }
 
-        if (brokerDetails) {
-          const pl = brokerDetails.unrealizedPL;
-          enriched.current_pl = pl.toString();
+        {
+          // Compute P/L from price data when broker doesn't report it (e.g. broker_trade_id = -1)
+          let pl = brokerDetails?.unrealizedPL ?? 0;
+          if (pl === 0 && pricingData) {
+            const mid = (pricingData.ask + pricingData.bid) / 2;
+            const entry = parseFloat(trade.entry_price);
+            const units = parseFloat(trade.units);
+            const rawPL = (mid - entry) * units; // positive units = long, negative = short
+            const quoteCcy = trade.instrument.split('_')[1];
+            const acctCcy = settings.account_currency || 'GBP';
+            pl = await convertToAccountCurrency(rawPL, quoteCcy, acctCcy);
+          }
+          enriched.current_pl = pl.toFixed(2);
           if (balance > 0) {
             enriched.current_pl_pct = (pl / balance * 100).toFixed(2);
           }

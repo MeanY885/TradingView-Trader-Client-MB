@@ -194,6 +194,11 @@ export async function handleBuySell(signal: WebhookSignal): Promise<{ success: b
   const maxSlippage = parseFloat(
     settingsMap[`max_slippage_pips_${signal.instrument}`] || settings.max_slippage_pips || '3'
   );
+  if (maxSlippage > 0 && !pricingResult) {
+    const msg = `Market data unavailable — cannot validate slippage for ${signal.instrument}`;
+    await logSignal(signal, 'rejected_no_pricing', false, msg);
+    return { success: false, message: msg };
+  }
   if (maxSlippage > 0) {
     const slippage = direction === 'buy'
       ? calcPips(ask, entryPrice, signal.instrument)

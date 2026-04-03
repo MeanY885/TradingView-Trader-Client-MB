@@ -124,6 +124,20 @@ export class IBClient {
     );
   }
 
+  // --- Order Warnings ---
+
+  async suppressOrderWarnings(): Promise<void> {
+    // Suppress common IB order warnings that block automated bracket orders:
+    // o10331 = stop order risk warning, o383 = size limit warning
+    await this.request<{ status: string }>(
+      '/v1/api/iserver/questions/suppress',
+      {
+        method: 'POST',
+        body: JSON.stringify({ messageIds: ['o10331', 'o383'] }),
+      }
+    ).catch((e) => console.warn('[IB] Failed to suppress order warnings:', e));
+  }
+
   // --- Contract Search ---
 
   async searchContract(symbol: string, secType: string): Promise<IBContractSearchResult[]> {

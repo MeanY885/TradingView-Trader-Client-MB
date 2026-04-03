@@ -695,7 +695,7 @@ export default function DashboardPage() {
       timer = setTimeout(async () => {
         await refresh();
         schedule();
-      }, activeCountRef.current > 0 ? 2000 : 8000);
+      }, activeCountRef.current > 0 ? 1000 : 8000);
     };
     refresh().then(() => schedule());
     return () => clearTimeout(timer);
