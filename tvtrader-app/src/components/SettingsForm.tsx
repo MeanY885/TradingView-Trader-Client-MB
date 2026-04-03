@@ -89,6 +89,8 @@ export default function SettingsForm() {
   // IB gateway status
   const [ibGatewayStatus, setIbGatewayStatus] = useState<{ authenticated: boolean; connected: boolean; competing?: boolean; message?: string } | null>(null);
   const [ibStatusChecking, setIbStatusChecking] = useState(false);
+  const [ibReauthInProgress, setIbReauthInProgress] = useState(false);
+  const [ibReauthMsg, setIbReauthMsg] = useState('');
   const [brokerMsg, setBrokerMsg] = useState('');
   const [balance, setBalance] = useState(0);
   const [balanceInputs, setBalanceInputs] = useState<Record<string, string>>({});
@@ -490,28 +492,99 @@ export default function SettingsForm() {
             <div className="border-t border-card-border pt-4">
               <div className="flex items-center justify-between mb-3">
                 <label className="block text-xs text-muted uppercase tracking-wider">Gateway Login</label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    // Open gateway login in user's browser.
-                    // The gateway is exposed on port 5000 of the same host.
-                    // We use the current hostname so it works from any client.
-                    const gwLoginUrl = `https://${window.location.hostname}:5000/sso/Login?forwardTo=22&RL=1&ip2loc=US`;
-                    window.open(gwLoginUrl, '_blank', 'noopener');
-                  }}
-                  className={`px-4 py-1.5 text-xs font-semibold rounded transition-colors ${
-                    ibGatewayStatus?.authenticated
-                      ? 'bg-background border border-card-border text-muted hover:border-accent'
-                      : 'bg-accent text-background hover:bg-accent/90'
-                  }`}
-                >
-                  {ibGatewayStatus?.authenticated ? 'Re-authenticate' : 'Log In to Gateway'}
-                </button>
+                <div className="flex gap-2">
+                  {ibGatewayStatus?.authenticated ? (
+                    <button
+                      type="button"
+                      disabled={ibReauthInProgress}
+                      onClick={async () => {
+                        // Try server-side re-auth first (works for expired sessions)
+                        setIbReauthInProgress(true);
+                        setIbReauthMsg('Re-authenticating...');
+                        try {
+                          const res = await fetch('/api/ib-reauth', { method: 'POST' });
+                          const data = await res.json();
+                          if (data.success) {
+                            setIbReauthMsg('Session renewed');
+                            setIbGatewayStatus(data.status);
+                          } else {
+                            setIbReauthMsg('Session expired — opening login...');
+                            // Fall back to login page via Caddy proxy (no self-signed cert issues)
+                            const loginPopup = window.open(
+                              `${window.location.origin}/sso/Login?forwardTo=22&RL=1&ip2loc=US`,
+                              'ib_login',
+                              'width=500,height=700,scrollbars=yes'
+                            );
+                            // Poll for successful auth while popup is open
+                            const pollId = setInterval(async () => {
+                              try {
+                                const statusRes = await fetch('/api/ib-status');
+                                const statusData = await statusRes.json();
+                                if (statusData.authenticated) {
+                                  setIbGatewayStatus(statusData);
+                                  setIbReauthMsg('Authenticated');
+                                  clearInterval(pollId);
+                                  loginPopup?.close();
+                                }
+                              } catch { /* ignore */ }
+                            }, 3000);
+                            // Stop polling after 5 minutes
+                            setTimeout(() => { clearInterval(pollId); setIbReauthMsg(''); }, 300000);
+                          }
+                        } catch {
+                          setIbReauthMsg('Re-auth failed');
+                        } finally {
+                          setIbReauthInProgress(false);
+                          setTimeout(() => setIbReauthMsg(''), 5000);
+                        }
+                      }}
+                      className="px-4 py-1.5 text-xs font-semibold rounded bg-background border border-card-border text-muted hover:border-accent transition-colors disabled:opacity-50"
+                    >
+                      {ibReauthInProgress ? 'Re-authenticating...' : 'Re-authenticate'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // Open login page via Caddy proxy — avoids self-signed cert issues
+                        const loginPopup = window.open(
+                          `${window.location.origin}/sso/Login?forwardTo=22&RL=1&ip2loc=US`,
+                          'ib_login',
+                          'width=500,height=700,scrollbars=yes'
+                        );
+                        setIbReauthMsg('Waiting for login...');
+                        // Poll for successful auth while popup is open
+                        const pollId = setInterval(async () => {
+                          try {
+                            const statusRes = await fetch('/api/ib-status');
+                            const statusData = await statusRes.json();
+                            if (statusData.authenticated) {
+                              setIbGatewayStatus(statusData);
+                              setIbReauthMsg('Authenticated');
+                              clearInterval(pollId);
+                              loginPopup?.close();
+                              setTimeout(() => setIbReauthMsg(''), 3000);
+                            }
+                          } catch { /* ignore */ }
+                        }, 3000);
+                        // Stop polling after 5 minutes
+                        setTimeout(() => { clearInterval(pollId); setIbReauthMsg(''); }, 300000);
+                      }}
+                      className="px-4 py-1.5 text-xs font-semibold rounded bg-accent text-background hover:bg-accent/90 transition-colors"
+                    >
+                      Log In to Gateway
+                    </button>
+                  )}
+                </div>
               </div>
               <p className="text-xs text-muted">
-                {ibGatewayStatus?.authenticated
+                {ibReauthMsg ? (
+                  <span className={ibReauthMsg === 'Authenticated' || ibReauthMsg === 'Session renewed' ? 'text-green' : 'text-accent'}>
+                    {ibReauthMsg}
+                  </span>
+                ) : ibGatewayStatus?.authenticated
                   ? 'Session is active. It will be kept alive automatically. IB requires re-login approximately once per day during scheduled maintenance.'
-                  : 'Opens the IB gateway login in a new tab. Log in with your IB credentials and 2FA, then click Refresh above.'}
+                  : 'Opens the IB gateway login page. Log in with your IB credentials and 2FA — this page will update automatically when login succeeds.'}
               </p>
             </div>
           </div>

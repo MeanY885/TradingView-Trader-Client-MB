@@ -11,7 +11,9 @@
     handle @gateway {
         reverse_proxy https://ib-gateway:5000 {
             transport http {
+                tls
                 tls_insecure_skip_verify
+                versions 1.1
             }
         }
     }
