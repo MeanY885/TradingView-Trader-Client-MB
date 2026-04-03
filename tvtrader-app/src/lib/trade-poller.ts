@@ -163,49 +163,48 @@ async function runTradeChecks(): Promise<number> {
 
         let tradeClosed = false;
 
-        // Check loss exit FIRST — protecting capital takes priority over taking profit
-        const lossTarget = parseFloat(settings[`loss_target_${trade.instrument}`] || '0');
-        if (lossTarget > 0) {
-          const effectiveTarget = lossTarget * scaleFactor;
-          if (pl <= -effectiveTarget) {
-            console.log(`[POLLER] Loss exit triggered for ${trade.instrument} — closing trade ${trade.broker_trade_id}`);
+        const profitTarget = parseFloat(settings[`profit_target_${trade.instrument}`] || '0');
+        if (profitTarget > 0) {
+          const effectiveTarget = profitTarget * scaleFactor;
+          if (pl >= effectiveTarget) {
+            console.log(`[POLLER] Profit exit triggered for ${trade.instrument} — closing trade ${trade.broker_trade_id}`);
             const closeResult = await broker.closeTrade(trade.broker_trade_id);
             const closePrice  = closeResult.fillPrice?.toString() || '';
             const closePL     = closePrice ? await computeRealizedPL(trade, closePrice) : (closeResult.realizedPL?.toString() || '0');
             await query(
-              `UPDATE trades SET status = 'loss_exited', close_price = $1, realized_pl = $2, closed_at = NOW(), peak_tracking_done = false WHERE id = $3`,
+              `UPDATE trades SET status = 'exited', close_price = $1, realized_pl = $2, closed_at = NOW(), peak_tracking_done = false WHERE id = $3`,
               [closePrice, closePL, trade.id]
             );
+            // Signal log is non-critical — don't let it break the close flow
             query(
               `INSERT INTO signal_log (action, instrument, payload, result, success, error)
                VALUES ($1, $2, $3, $4, $5, $6)`,
-              ['loss_exit', trade.instrument, JSON.stringify({ source: 'poller', pl, effectiveTarget, closePrice }), 'exited', true, null]
+              ['profit_exit', trade.instrument, JSON.stringify({ source: 'poller', pl, effectiveTarget, closePrice }), 'exited', true, null]
             ).catch((e) => console.warn('[POLLER] signal_log insert failed:', e));
-            console.log(`[POLLER] Loss exit complete — ${trade.instrument} closed at ${closePrice}, PL: ${closePL}`);
+            console.log(`[POLLER] Profit exit complete — ${trade.instrument} closed at ${closePrice}, PL: ${closePL}`);
             tradeClosed = true;
           }
         }
 
         if (!tradeClosed) {
-          const profitTarget = parseFloat(settings[`profit_target_${trade.instrument}`] || '0');
-          if (profitTarget > 0) {
-            const effectiveTarget = profitTarget * scaleFactor;
-            if (pl >= effectiveTarget) {
-              console.log(`[POLLER] Profit exit triggered for ${trade.instrument} — closing trade ${trade.broker_trade_id}`);
+          const lossTarget = parseFloat(settings[`loss_target_${trade.instrument}`] || '0');
+          if (lossTarget > 0) {
+            const effectiveTarget = lossTarget * scaleFactor;
+            if (pl <= -effectiveTarget) {
+              console.log(`[POLLER] Loss exit triggered for ${trade.instrument} — closing trade ${trade.broker_trade_id}`);
               const closeResult = await broker.closeTrade(trade.broker_trade_id);
               const closePrice  = closeResult.fillPrice?.toString() || '';
               const closePL     = closePrice ? await computeRealizedPL(trade, closePrice) : (closeResult.realizedPL?.toString() || '0');
               await query(
-                `UPDATE trades SET status = 'exited', close_price = $1, realized_pl = $2, closed_at = NOW(), peak_tracking_done = false WHERE id = $3`,
+                `UPDATE trades SET status = 'loss_exited', close_price = $1, realized_pl = $2, closed_at = NOW(), peak_tracking_done = false WHERE id = $3`,
                 [closePrice, closePL, trade.id]
               );
               query(
                 `INSERT INTO signal_log (action, instrument, payload, result, success, error)
                  VALUES ($1, $2, $3, $4, $5, $6)`,
-                ['profit_exit', trade.instrument, JSON.stringify({ source: 'poller', pl, effectiveTarget, closePrice }), 'exited', true, null]
+                ['loss_exit', trade.instrument, JSON.stringify({ source: 'poller', pl, effectiveTarget, closePrice }), 'exited', true, null]
               ).catch((e) => console.warn('[POLLER] signal_log insert failed:', e));
-              console.log(`[POLLER] Profit exit complete — ${trade.instrument} closed at ${closePrice}, PL: ${closePL}`);
-              tradeClosed = true;
+              console.log(`[POLLER] Loss exit complete — ${trade.instrument} closed at ${closePrice}, PL: ${closePL}`);
             }
           }
         }
