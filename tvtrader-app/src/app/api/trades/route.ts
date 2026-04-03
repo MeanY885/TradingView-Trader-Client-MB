@@ -9,7 +9,7 @@ export async function GET() {
       query<Trade>('SELECT * FROM trades ORDER BY created_at DESC LIMIT 100'),
       getSettings(),
     ]);
-    const accountCurrency = settings.account_currency || 'GBP';
+    const accountCurrency = settings.account_currency || 'USD';
 
     // Enrich all trades with account-currency-converted peak/trough P/L.
     // For closed trades the rate is approximate (today's rate), but far more accurate

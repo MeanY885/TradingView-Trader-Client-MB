@@ -10,7 +10,7 @@
 
 import { query, getSettings } from './db';
 import { getBroker } from './brokers/factory';
-import { syncTradeWithBroker } from './trade-manager';
+import { syncTradeWithBroker, computeRealizedPL } from './trade-manager';
 import { Trade } from '../types';
 
 const POLL_ACTIVE_MS = 2_000;   // while trade(s) open
@@ -170,7 +170,8 @@ async function runTradeChecks(): Promise<number> {
             console.log(`[POLLER] Profit exit triggered for ${trade.instrument} — closing trade ${trade.broker_trade_id}`);
             const closeResult = await broker.closeTrade(trade.broker_trade_id);
             const closePrice  = closeResult.fillPrice?.toString() || '';
-            const closePL     = closeResult.realizedPL?.toString() || '0';
+            // Compute P/L from prices — more reliable than broker-reported values
+            const closePL     = closePrice ? await computeRealizedPL(trade, closePrice) : (closeResult.realizedPL?.toString() || '0');
             await query(
               `UPDATE trades SET status = 'exited', close_price = $1, realized_pl = $2, closed_at = NOW(), peak_tracking_done = false WHERE id = $3`,
               [closePrice, closePL, trade.id]
@@ -193,7 +194,8 @@ async function runTradeChecks(): Promise<number> {
               console.log(`[POLLER] Loss exit triggered for ${trade.instrument} — closing trade ${trade.broker_trade_id}`);
               const closeResult = await broker.closeTrade(trade.broker_trade_id);
               const closePrice  = closeResult.fillPrice?.toString() || '';
-              const closePL     = closeResult.realizedPL?.toString() || '0';
+              // Compute P/L from prices — more reliable than broker-reported values
+              const closePL     = closePrice ? await computeRealizedPL(trade, closePrice) : (closeResult.realizedPL?.toString() || '0');
               await query(
                 `UPDATE trades SET status = 'exited', close_price = $1, realized_pl = $2, closed_at = NOW(), peak_tracking_done = false WHERE id = $3`,
                 [closePrice, closePL, trade.id]

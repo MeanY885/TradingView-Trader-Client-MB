@@ -10,7 +10,7 @@ export async function GET(request: Request) {
     let ccy = searchParams.get('ccy')?.toUpperCase();
     if (!ccy) {
       const settings = await getSettings();
-      ccy = settings.account_currency || 'GBP';
+      ccy = settings.account_currency || 'USD';
     }
 
     const broker = await getBroker();

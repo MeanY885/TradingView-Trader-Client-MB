@@ -3,6 +3,7 @@ import { getBroker } from './brokers/factory';
 import { BrokerAdapter } from './brokers/types';
 import { InsufficientMarginError } from './brokers/errors';
 import { calcPips, getInstrumentPrecision, formatPrice as formatPriceUtil } from './brokers/instruments';
+import { convertToAccountCurrency } from './currency';
 import { WebhookSignal, Trade } from '../types';
 
 function formatPrice(price: string, instrument: string): string {
@@ -27,6 +28,27 @@ async function getUnitPriceInAccountCurrency(broker: BrokerAdapter, instrument: 
       return midPrice;
     }
   }
+}
+
+/**
+ * Compute realized P/L from entry/close prices and units, converted to account currency.
+ * More reliable than broker-reported values (IB's pos.realizedPnl is pre-close,
+ * exec.net_amount is execution cash impact, not round-trip P/L).
+ */
+export async function computeRealizedPL(trade: Trade, closePrice: string): Promise<string> {
+  const entry = parseFloat(trade.entry_price);
+  const close = parseFloat(closePrice);
+  const units = parseFloat(trade.units); // signed: positive=long, negative=short
+  if (!entry || !close || !units) return '0';
+
+  const rawPL = (close - entry) * units; // in quote currency
+  const quoteCcy = trade.instrument.split('_')[1];
+  const settings = await getSettings();
+  const acctCcy = settings.account_currency || 'USD';
+
+  if (quoteCcy === acctCcy) return rawPL.toFixed(2);
+  const converted = await convertToAccountCurrency(rawPL, quoteCcy, acctCcy);
+  return converted.toFixed(2);
 }
 
 async function logSignal(signal: WebhookSignal, result: string, success: boolean, error?: string): Promise<void> {
@@ -352,6 +374,11 @@ export async function handleTpSl(signal: WebhookSignal): Promise<{ success: bool
     // tp1, tp2, tp3 all close as tp_hit; sl closes as sl_hit
     const status = (signal.action === 'sl') ? 'sl_hit' : 'tp_hit';
 
+    // Compute P/L from prices — more reliable than broker-reported values
+    if (closePrice) {
+      closePL = await computeRealizedPL(trade, closePrice);
+    }
+
     await query(
       `UPDATE trades
        SET status = $1, close_price = $2, realized_pl = $3, closed_at = NOW(),
@@ -393,7 +420,8 @@ export async function handleExit(signal: WebhookSignal): Promise<{ success: bool
     const broker = await getBroker();
     const closeResult = await broker.closeTrade(trade.broker_trade_id);
     const closePrice = closeResult.fillPrice?.toString() || '';
-    const closePL = closeResult.realizedPL?.toString() || '';
+    // Compute P/L from prices — more reliable than broker-reported values
+    const closePL = closePrice ? await computeRealizedPL(trade, closePrice) : (closeResult.realizedPL?.toString() || '');
     await query(
       'UPDATE trades SET status = \'exited\', close_price = $1, realized_pl = $2, closed_at = NOW() WHERE id = $3',
       [closePrice, closePL, trade.id]
@@ -424,7 +452,8 @@ export async function syncTradeWithBroker(trade: Trade): Promise<boolean> {
         : found.stopLossFilled ? 'sl_hit'
         : 'exited';
       const closePrice = found.averageClosePrice?.toString() || trade.tp_price;
-      const closePL = found.realizedPL?.toString() || '0';
+      // Compute P/L from prices — more reliable than broker-reported values
+      const closePL = closePrice ? await computeRealizedPL(trade, closePrice) : (found.realizedPL?.toString() || '0');
       const closedAt = found.closeTime || new Date().toISOString();
       const highestPrice = found.highestPrice?.toString() || null;
       const lowestPrice = found.lowestPrice?.toString() || null;
@@ -468,7 +497,8 @@ async function syncFromTransactions(trade: Trade): Promise<boolean> {
       : fillTxn.reason === 'STOP_LOSS_ORDER' ? 'sl_hit'
       : 'exited';
     const closePrice = closed?.price?.toString() || fillTxn.price?.toString() || trade.tp_price;
-    const closePL = closed?.realizedPL?.toString() || fillTxn.realizedPL?.toString() || '0';
+    // Compute P/L from prices — more reliable than broker-reported values
+    const closePL = closePrice ? await computeRealizedPL(trade, closePrice) : (closed?.realizedPL?.toString() || fillTxn.realizedPL?.toString() || '0');
     const closedAt = fillTxn.time || new Date().toISOString();
 
     await query(

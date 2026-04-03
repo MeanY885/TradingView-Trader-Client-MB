@@ -40,6 +40,8 @@ export class IBAdapter implements BrokerAdapter {
   private connected = false;
   /** Conids that have been primed (first snapshot call subscribes to data) */
   private primedConids = new Set<number>();
+  /** Cached ledger exchange rates (currency → rate-to-base). Updated on getAccountSummary(). */
+  private cachedLedgerRates: Record<string, number> = {};
 
   async connect(): Promise<void> {
     if (this.connected) return;
@@ -104,9 +106,10 @@ export class IBAdapter implements BrokerAdapter {
 
   async getAccountSummary(): Promise<AccountSummary> {
     const client = this.getClient();
-    const [ledger, positions] = await Promise.all([
+    const [ledger, positions, settings] = await Promise.all([
       client.getAccountLedger(),
       client.getPositions().catch(() => []),
+      getSettings(),
     ]);
 
     // The ledger has entries keyed by currency. The "BASE" key has the totals.
@@ -117,10 +120,22 @@ export class IBAdapter implements BrokerAdapter {
         nav: 0,
         marginAvailable: 0,
         unrealizedPL: 0,
-        currency: 'USD',
+        currency: settings.account_currency || 'USD',
         openTradeCount: 0,
         marginUsed: 0,
       };
+    }
+
+    // IB ledger BASE entry has currency: "BASE" (not the actual currency).
+    // Use the account_currency setting which the user configures in the UI.
+    const accountCurrency = settings.account_currency || 'USD';
+
+    // Cache ledger exchange rates for synthetic FX pair lookups
+    this.cachedLedgerRates = {};
+    for (const [key, entry] of Object.entries(ledger)) {
+      if (key !== 'BASE' && entry.exchangerate && entry.exchangerate > 0) {
+        this.cachedLedgerRates[entry.currency || key] = entry.exchangerate;
+      }
     }
 
     const nav = base.netliquidationvalue || 0;
@@ -134,7 +149,7 @@ export class IBAdapter implements BrokerAdapter {
       nav,
       marginAvailable,
       unrealizedPL: base.unrealizedpnl || 0,
-      currency: base.currency || 'USD',
+      currency: accountCurrency,
       openTradeCount,
       marginUsed,
     };
@@ -161,7 +176,11 @@ export class IBAdapter implements BrokerAdapter {
   async getPricing(instrument: string): Promise<PriceQuote> {
     const config = INSTRUMENTS[instrument];
     if (!config) {
-      throw new BrokerError(`Unknown instrument ${instrument}`, 'interactive_brokers', 'INVALID_PRICE', true);
+      // For FX pairs not in INSTRUMENTS (e.g. JPY_EUR, USD_EUR), synthesize
+      // from cached IB ledger exchange rates. Each ledger currency has an
+      // exchangerate field that converts 1 unit of that currency to the base
+      // (account) currency. So BASE_QUOTE rate = baseRate / quoteRate.
+      return this.getSyntheticPricing(instrument);
     }
 
     const client = this.getClient();
@@ -246,7 +265,7 @@ export class IBAdapter implements BrokerAdapter {
       }
     }
 
-    // Fallback: use position mktPrice for any missing instruments
+    // Fallback: use position mktPrice for any missing registered instruments
     const missing = instruments.filter((inst) => !results.has(inst));
     if (missing.length > 0) {
       try {
@@ -264,10 +283,71 @@ export class IBAdapter implements BrokerAdapter {
       } catch (e) {
         console.warn('[IB] Position fallback in getPricingMulti failed:', e);
       }
+
+      // For pairs not in INSTRUMENTS (e.g. GBP_JPY, EUR_GBP), try synthetic ledger rates
+      const stillMissing = instruments.filter((inst) => !results.has(inst));
+      for (const inst of stillMissing) {
+        try {
+          const quote = await this.getSyntheticPricing(inst);
+          results.set(inst, quote);
+        } catch { /* no rate available */ }
+      }
     }
 
     return instruments.map((inst) =>
       results.get(inst) || { instrument: inst, ask: 0, bid: 0 }
+    );
+  }
+
+  /**
+   * Synthesize a price quote for an FX pair not in INSTRUMENTS using IB ledger
+   * exchange rates. The ledger's exchangerate converts 1 unit of a currency to
+   * the account's base currency. So for pair BASE_QUOTE: rate = baseRate / quoteRate.
+   * Returns bid ≈ ask (no spread info from ledger).
+   */
+  private async getSyntheticPricing(instrument: string): Promise<PriceQuote> {
+    const [base, quote] = instrument.split('_');
+    if (!base || !quote) {
+      throw new BrokerError(`Invalid instrument format: ${instrument}`, 'interactive_brokers', 'INVALID_PRICE', true);
+    }
+
+    // Ensure we have ledger rates (populated by getAccountSummary)
+    if (Object.keys(this.cachedLedgerRates).length === 0) {
+      // Force a ledger fetch to populate rates
+      try {
+        const client = this.getClient();
+        const ledger = await client.getAccountLedger();
+        for (const [key, entry] of Object.entries(ledger)) {
+          if (key !== 'BASE' && entry.exchangerate && entry.exchangerate > 0) {
+            this.cachedLedgerRates[entry.currency || key] = entry.exchangerate;
+          }
+        }
+      } catch (e) {
+        throw new BrokerError(`Cannot fetch ledger for FX rate ${instrument}: ${e}`, 'interactive_brokers', 'INVALID_PRICE', true);
+      }
+    }
+
+    // The account's base currency has an implicit rate of 1.0
+    const settings = await getSettings();
+    const acctCcy = settings.account_currency || 'USD';
+
+    const getRate = (ccy: string): number | undefined => {
+      if (ccy === acctCcy) return 1.0;
+      return this.cachedLedgerRates[ccy];
+    };
+
+    const baseRate = getRate(base);
+    const quoteRate = getRate(quote);
+
+    if (baseRate && quoteRate && quoteRate > 0) {
+      const mid = baseRate / quoteRate;
+      console.log(`[IB] Synthetic rate for ${instrument}: ${mid.toFixed(6)} (ledger: ${base}=${baseRate}, ${quote}=${quoteRate})`);
+      return { instrument, ask: mid, bid: mid };
+    }
+
+    throw new BrokerError(
+      `No ledger rate available for ${instrument} (${base}=${baseRate}, ${quote}=${quoteRate})`,
+      'interactive_brokers', 'INVALID_PRICE', true,
     );
   }
 
@@ -340,7 +420,7 @@ export class IBAdapter implements BrokerAdapter {
           const { convertToAccountCurrency } = await import('../../currency');
           const settings = await getSettings();
           const quoteCcy = instrument.split('_')[1];
-          const acctCcy = settings.account_currency || 'GBP';
+          const acctCcy = settings.account_currency || 'USD';
           trade.unrealizedPL = await convertToAccountCurrency(rawPL, quoteCcy, acctCcy);
         } catch { /* keep IB's cached value as fallback */ }
       }

@@ -97,17 +97,20 @@ export async function GET() {
             const units = parseFloat(trade.units);
             const rawPL = (mid - entry) * units; // positive units = long, negative = short
             const quoteCcy = trade.instrument.split('_')[1];
-            const acctCcy = settings.account_currency || 'GBP';
+            const acctCcy = settings.account_currency || 'USD';
             pl = await convertToAccountCurrency(rawPL, quoteCcy, acctCcy);
           }
           enriched.current_pl = pl.toFixed(2);
-          if (balance > 0) {
-            enriched.current_pl_pct = (pl / balance * 100).toFixed(2);
+          // Use capital allocated to this trade (notional_account_ccy) for percentage,
+          // not total account balance — gives meaningful per-trade risk/reward %
+          const notionalForPct = trade.notional_account_ccy ? parseFloat(trade.notional_account_ccy) : 0;
+          if (notionalForPct > 0) {
+            enriched.current_pl_pct = (pl / notionalForPct * 100).toFixed(2);
           }
 
           // Profit/loss exit prices are computed here for the UI bar markers.
           // Actual exit logic runs in the background poller every 2 s.
-          const accountCurrency = settings.account_currency || 'GBP';
+          const accountCurrency = settings.account_currency || 'USD';
           const quoteCurrencyForExit = trade.instrument.split('_')[1];
           const entryForExit = parseFloat(trade.entry_price);
           const absUnitsForExit = Math.abs(parseFloat(trade.units));
@@ -141,7 +144,7 @@ export async function GET() {
         }
 
         // Potential profit/loss
-        const acctCcy = settings.account_currency || 'GBP';
+        const acctCcy = settings.account_currency || 'USD';
         const entryNum = parseFloat(trade.entry_price);
         const tpNum = parseFloat(trade.tp_price);
         const slNum = parseFloat(trade.sl_price);
@@ -151,12 +154,13 @@ export async function GET() {
         const rawProfit = (trade.direction === 'buy' ? tpNum - entryNum : entryNum - tpNum) * absUnits;
         const potentialProfit = await convertToAccountCurrency(rawProfit, quoteCurrency, acctCcy);
         enriched.potential_profit = potentialProfit.toFixed(2);
-        if (balance > 0) enriched.potential_profit_pct = (potentialProfit / balance * 100).toFixed(2);
+        const notionalForPotential = trade.notional_account_ccy ? parseFloat(trade.notional_account_ccy) : 0;
+        if (notionalForPotential > 0) enriched.potential_profit_pct = (potentialProfit / notionalForPotential * 100).toFixed(2);
 
         const rawLoss = (trade.direction === 'buy' ? slNum - entryNum : entryNum - slNum) * absUnits;
         const potentialLoss = await convertToAccountCurrency(rawLoss, quoteCurrency, acctCcy);
         enriched.potential_loss = potentialLoss.toFixed(2);
-        if (balance > 0) enriched.potential_loss_pct = (potentialLoss / balance * 100).toFixed(2);
+        if (notionalForPotential > 0) enriched.potential_loss_pct = (potentialLoss / notionalForPotential * 100).toFixed(2);
 
         // Peak P/L and Max Drawdown — convert from quote currency to account currency
         const highestNum = trade.highest_price ? parseFloat(trade.highest_price) : null;
