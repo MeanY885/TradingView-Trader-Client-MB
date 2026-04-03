@@ -377,15 +377,15 @@ function ActiveTradeCard({ trade, profitTarget, lossTarget, sym }: { trade: Trad
           </p>
         </div>
         <div>
-          <p className="text-xs lg:text-sm text-muted mb-0.5 lg:mb-1">Profit if TP Hit</p>
-          <p className="text-lg lg:text-xl 2xl:text-2xl font-bold tabular-nums text-green">
-            +{sym}{potProfit.toFixed(2)}<span className="text-xs lg:text-sm ml-1">(+{potProfitPct.toFixed(2)}%)</span>
-          </p>
-        </div>
-        <div>
           <p className="text-xs lg:text-sm text-muted mb-0.5 lg:mb-1">Loss if SL Hit</p>
           <p className="text-lg lg:text-xl 2xl:text-2xl font-bold tabular-nums text-red">
             -{sym}{Math.abs(potLoss).toFixed(2)}<span className="text-xs lg:text-sm ml-1">({potLossPct.toFixed(2)}%)</span>
+          </p>
+        </div>
+        <div>
+          <p className="text-xs lg:text-sm text-muted mb-0.5 lg:mb-1">Profit if TP Hit</p>
+          <p className="text-lg lg:text-xl 2xl:text-2xl font-bold tabular-nums text-green">
+            +{sym}{potProfit.toFixed(2)}<span className="text-xs lg:text-sm ml-1">(+{potProfitPct.toFixed(2)}%)</span>
           </p>
         </div>
         <div>
