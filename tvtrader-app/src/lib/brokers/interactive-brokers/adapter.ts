@@ -104,7 +104,10 @@ export class IBAdapter implements BrokerAdapter {
 
   async getAccountSummary(): Promise<AccountSummary> {
     const client = this.getClient();
-    const ledger = await client.getAccountLedger();
+    const [ledger, positions] = await Promise.all([
+      client.getAccountLedger(),
+      client.getPositions().catch(() => []),
+    ]);
 
     // The ledger has entries keyed by currency. The "BASE" key has the totals.
     const base = ledger['BASE'] || Object.values(ledger)[0];
@@ -120,14 +123,20 @@ export class IBAdapter implements BrokerAdapter {
       };
     }
 
+    const nav = base.netliquidationvalue || 0;
+    const marginAvailable = base.funds || 0;
+    const openTradeCount = positions.filter((p) => p.position !== 0).length;
+    // marginUsed = NAV - available margin (mirrors Oanda's calculation)
+    const marginUsed = Math.max(0, nav - marginAvailable);
+
     return {
       balance: base.cashbalance || 0,
-      nav: base.netliquidationvalue || 0,
-      marginAvailable: base.funds || 0,
+      nav,
+      marginAvailable,
       unrealizedPL: base.unrealizedpnl || 0,
       currency: base.currency || 'USD',
-      openTradeCount: 0, // Populated from positions
-      marginUsed: 0,
+      openTradeCount,
+      marginUsed,
     };
   }
 
@@ -264,12 +273,46 @@ export class IBAdapter implements BrokerAdapter {
 
   // --- Trades ---
 
+  /**
+   * Fetch open orders and build a map of conid → { takeProfitPrice, stopLossPrice }.
+   * This gives IB the same TP/SL visibility that Oanda provides natively on trades.
+   */
+  private async getBracketOrderMap(client: IBClient): Promise<Map<number, { takeProfitPrice?: number; stopLossPrice?: number }>> {
+    const map = new Map<number, { takeProfitPrice?: number; stopLossPrice?: number }>();
+    try {
+      const openOrders = await client.getOpenOrders();
+      for (const order of openOrders) {
+        if (!map.has(order.conid)) map.set(order.conid, {});
+        const entry = map.get(order.conid)!;
+        if (order.origOrderType === 'LMT' && order.price > 0) {
+          entry.takeProfitPrice = order.price;
+        } else if (order.origOrderType === 'STP' && order.price > 0) {
+          entry.stopLossPrice = order.price;
+        }
+      }
+    } catch (e) {
+      console.warn('[IB] Failed to fetch open orders for bracket map:', e);
+    }
+    return map;
+  }
+
   async getOpenTrades(): Promise<BrokerTrade[]> {
     const client = this.getClient();
-    const positions = await client.getPositions();
+    const [positions, bracketMap] = await Promise.all([
+      client.getPositions(),
+      this.getBracketOrderMap(client),
+    ]);
     return positions
       .filter((p) => p.position !== 0)
-      .map((p) => this.positionToBrokerTrade(p));
+      .map((p) => {
+        const trade = this.positionToBrokerTrade(p);
+        const bracket = bracketMap.get(p.conid);
+        if (bracket) {
+          trade.takeProfitPrice = bracket.takeProfitPrice;
+          trade.stopLossPrice = bracket.stopLossPrice;
+        }
+        return trade;
+      });
   }
 
   async getTradeDetails(brokerTradeId: string): Promise<BrokerTrade> {
@@ -304,6 +347,7 @@ export class IBAdapter implements BrokerAdapter {
     const executions = await client.getTrades();
     const exec = executions.find((e) => e.execution_id === brokerTradeId || String(e.conid) === brokerTradeId);
     if (exec) {
+      const { isTP, isSL } = this.classifyExecution(exec);
       return {
         brokerTradeId,
         instrument: this.conidToCanonical(exec.conid),
@@ -312,6 +356,10 @@ export class IBAdapter implements BrokerAdapter {
         unrealizedPL: 0,
         state: 'CLOSED',
         realizedPL: exec.net_amount,
+        averageClosePrice: parseFloat(exec.price),
+        closeTime: exec.trade_time,
+        takeProfitFilled: isTP,
+        stopLossFilled: isSL,
       };
     }
 
@@ -329,29 +377,58 @@ export class IBAdapter implements BrokerAdapter {
   async getClosedTrades(count = 50): Promise<BrokerTrade[]> {
     const client = this.getClient();
     const executions = await client.getTrades();
-    return executions.slice(0, count).map((exec) => ({
-      brokerTradeId: exec.execution_id,
-      instrument: this.conidToCanonical(exec.conid),
-      units: exec.side === 'BUY' ? exec.size : -exec.size,
-      entryPrice: parseFloat(exec.price),
-      unrealizedPL: 0,
-      state: 'CLOSED' as const,
-      realizedPL: exec.net_amount,
-      closeTime: exec.trade_time,
-    }));
+    return executions.slice(0, count).map((exec) => {
+      const { isTP, isSL } = this.classifyExecution(exec);
+      return {
+        brokerTradeId: exec.execution_id,
+        instrument: this.conidToCanonical(exec.conid),
+        units: exec.side === 'BUY' ? exec.size : -exec.size,
+        entryPrice: parseFloat(exec.price),
+        unrealizedPL: 0,
+        state: 'CLOSED' as const,
+        realizedPL: exec.net_amount,
+        closeTime: exec.trade_time,
+        averageClosePrice: parseFloat(exec.price),
+        takeProfitFilled: isTP,
+        stopLossFilled: isSL,
+      };
+    });
   }
 
   async getTransactionsSinceId(_id: string): Promise<TransactionRecord[]> {
     const client = this.getClient();
     const executions = await client.getTrades();
-    return executions.map((exec) => ({
-      type: 'ORDER_FILL',
-      brokerTradeId: exec.execution_id,
-      reason: exec.order_description,
-      price: parseFloat(exec.price),
-      realizedPL: exec.net_amount,
-      time: exec.trade_time,
-    }));
+    return executions.map((exec) => {
+      const { isTP, isSL } = this.classifyExecution(exec);
+      const reason = isTP ? 'TAKE_PROFIT_ORDER'
+        : isSL ? 'STOP_LOSS_ORDER'
+        : exec.order_description;
+      return {
+        type: 'ORDER_FILL',
+        brokerTradeId: exec.execution_id,
+        tradesClosed: [{
+          brokerTradeId: String(exec.conid),
+          price: parseFloat(exec.price),
+          realizedPL: exec.net_amount,
+        }],
+        reason,
+        price: parseFloat(exec.price),
+        realizedPL: exec.net_amount,
+        time: exec.trade_time,
+      };
+    });
+  }
+
+  /**
+   * Classify an IB execution as TP or SL based on order_description.
+   * IB's order_description typically contains "LMT" for limit (TP) and "STP" for stop (SL) orders.
+   */
+  private classifyExecution(exec: { order_description: string }): { isTP: boolean; isSL: boolean } {
+    const desc = (exec.order_description || '').toUpperCase();
+    // IB bracket TP legs are LMT orders, SL legs are STP orders
+    const isTP = desc.includes('LMT') && !desc.includes('STP');
+    const isSL = desc.includes('STP');
+    return { isTP, isSL };
   }
 
   // --- Order Execution ---
@@ -403,7 +480,7 @@ export class IBAdapter implements BrokerAdapter {
       orderType: 'STP',
       side: tpSide,
       quantity,
-      price: stopLossPrice,
+      auxPrice: stopLossPrice,
       tif: 'GTC',
       listingExchange: config.ib.exchange,
       cOID: `sl_${Date.now()}`,
@@ -485,6 +562,10 @@ export class IBAdapter implements BrokerAdapter {
   async closeTrade(brokerTradeId: string): Promise<CloseResult> {
     const client = this.getClient();
 
+    // Cancel any existing bracket orders (TP/SL) for this conid FIRST
+    // to prevent orphaned orders firing after the position is closed.
+    await this.cancelBracketOrdersForConid(client, parseInt(brokerTradeId, 10));
+
     // Find the open position for this trade
     const positions = await client.getPositions();
     const pos = positions.find((p) => String(p.conid) === brokerTradeId);
@@ -515,6 +596,29 @@ export class IBAdapter implements BrokerAdapter {
       fillPrice: pos.mktPrice || undefined,
       realizedPL: pos.realizedPnl || undefined,
     };
+  }
+
+  /**
+   * Cancel all open bracket orders (TP limit + SL stop) for a given conid.
+   * Oanda does this automatically when a trade is closed; IB does not.
+   */
+  private async cancelBracketOrdersForConid(client: IBClient, conid: number): Promise<void> {
+    try {
+      const openOrders = await client.getOpenOrders();
+      const bracketOrders = openOrders.filter(
+        (o) => o.conid === conid && (o.origOrderType === 'LMT' || o.origOrderType === 'STP')
+      );
+      for (const order of bracketOrders) {
+        try {
+          await client.cancelOrder(String(order.orderId));
+          console.log(`[IB] Cancelled bracket order ${order.orderId} (${order.origOrderType}) for conid ${conid}`);
+        } catch (e) {
+          console.warn(`[IB] Failed to cancel bracket order ${order.orderId}:`, e);
+        }
+      }
+    } catch (e) {
+      console.warn(`[IB] Failed to fetch open orders for bracket cancellation:`, e);
+    }
   }
 
   // --- Market Data ---
