@@ -284,10 +284,14 @@ export class IBAdapter implements BrokerAdapter {
       for (const order of openOrders) {
         if (!map.has(order.conid)) map.set(order.conid, {});
         const entry = map.get(order.conid)!;
-        if (order.origOrderType === 'LMT' && order.price > 0) {
+        // IB returns origOrderType as "LIMIT"/"STOP" (not "LMT"/"STP")
+        // For LIMIT orders, price is in the `price` field
+        // For STOP orders, price is in `auxPrice` or `stop_price` (price is empty)
+        if (order.origOrderType === 'LIMIT' && order.price > 0) {
           entry.takeProfitPrice = order.price;
-        } else if (order.origOrderType === 'STP' && order.price > 0) {
-          entry.stopLossPrice = order.price;
+        } else if (order.origOrderType === 'STOP') {
+          const stopPrice = order.auxPrice || order.stop_price || 0;
+          if (stopPrice > 0) entry.stopLossPrice = stopPrice;
         }
       }
     } catch (e) {
@@ -344,22 +348,25 @@ export class IBAdapter implements BrokerAdapter {
     }
 
     // Check executions for closed trade
-    const executions = await client.getTrades();
+    const [executions, orderTypeMap] = await Promise.all([
+      client.getTrades(),
+      this.getOrderTypeMap(client),
+    ]);
     const exec = executions.find((e) => e.execution_id === brokerTradeId || String(e.conid) === brokerTradeId);
     if (exec) {
-      const { isTP, isSL } = this.classifyExecution(exec);
+      const orderType = orderTypeMap.get(exec.order_id);
       return {
         brokerTradeId,
         instrument: this.conidToCanonical(exec.conid),
-        units: exec.side === 'BUY' ? exec.size : -exec.size,
+        units: exec.side === 'B' ? exec.size : -exec.size,
         entryPrice: parseFloat(exec.price),
         unrealizedPL: 0,
         state: 'CLOSED',
         realizedPL: exec.net_amount,
         averageClosePrice: parseFloat(exec.price),
         closeTime: exec.trade_time,
-        takeProfitFilled: isTP,
-        stopLossFilled: isSL,
+        takeProfitFilled: orderType === 'LIMIT',
+        stopLossFilled: orderType === 'STOP',
       };
     }
 
@@ -376,13 +383,18 @@ export class IBAdapter implements BrokerAdapter {
 
   async getClosedTrades(count = 50): Promise<BrokerTrade[]> {
     const client = this.getClient();
-    const executions = await client.getTrades();
+    const [executions, orderTypeMap] = await Promise.all([
+      client.getTrades(),
+      this.getOrderTypeMap(client),
+    ]);
     return executions.slice(0, count).map((exec) => {
-      const { isTP, isSL } = this.classifyExecution(exec);
+      const orderType = orderTypeMap.get(exec.order_id);
+      const isTP = orderType === 'LIMIT';
+      const isSL = orderType === 'STOP';
       return {
         brokerTradeId: exec.execution_id,
         instrument: this.conidToCanonical(exec.conid),
-        units: exec.side === 'BUY' ? exec.size : -exec.size,
+        units: exec.side === 'B' ? exec.size : -exec.size,
         entryPrice: parseFloat(exec.price),
         unrealizedPL: 0,
         state: 'CLOSED' as const,
@@ -397,11 +409,14 @@ export class IBAdapter implements BrokerAdapter {
 
   async getTransactionsSinceId(_id: string): Promise<TransactionRecord[]> {
     const client = this.getClient();
-    const executions = await client.getTrades();
+    const [executions, orderTypeMap] = await Promise.all([
+      client.getTrades(),
+      this.getOrderTypeMap(client),
+    ]);
     return executions.map((exec) => {
-      const { isTP, isSL } = this.classifyExecution(exec);
-      const reason = isTP ? 'TAKE_PROFIT_ORDER'
-        : isSL ? 'STOP_LOSS_ORDER'
+      const orderType = orderTypeMap.get(exec.order_id);
+      const reason = orderType === 'LIMIT' ? 'TAKE_PROFIT_ORDER'
+        : orderType === 'STOP' ? 'STOP_LOSS_ORDER'
         : exec.order_description;
       return {
         type: 'ORDER_FILL',
@@ -420,15 +435,21 @@ export class IBAdapter implements BrokerAdapter {
   }
 
   /**
-   * Classify an IB execution as TP or SL based on order_description.
-   * IB's order_description typically contains "LMT" for limit (TP) and "STP" for stop (SL) orders.
+   * Build a map of orderId → origOrderType from the orders endpoint.
+   * Used to classify executions as TP (LIMIT) or SL (STOP) fills,
+   * since the trades endpoint doesn't include order type info.
    */
-  private classifyExecution(exec: { order_description: string }): { isTP: boolean; isSL: boolean } {
-    const desc = (exec.order_description || '').toUpperCase();
-    // IB bracket TP legs are LMT orders, SL legs are STP orders
-    const isTP = desc.includes('LMT') && !desc.includes('STP');
-    const isSL = desc.includes('STP');
-    return { isTP, isSL };
+  private async getOrderTypeMap(client: IBClient): Promise<Map<number, string>> {
+    const map = new Map<number, string>();
+    try {
+      const openOrders = await client.getOpenOrders();
+      for (const order of openOrders) {
+        map.set(order.orderId, order.origOrderType);
+      }
+    } catch (e) {
+      console.warn('[IB] Failed to fetch orders for type classification:', e);
+    }
+    return map;
   }
 
   // --- Order Execution ---
@@ -480,7 +501,7 @@ export class IBAdapter implements BrokerAdapter {
       orderType: 'STP',
       side: tpSide,
       quantity,
-      auxPrice: stopLossPrice,
+      price: stopLossPrice,
       tif: 'GTC',
       listingExchange: config.ib.exchange,
       cOID: `sl_${Date.now()}`,
@@ -606,7 +627,7 @@ export class IBAdapter implements BrokerAdapter {
     try {
       const openOrders = await client.getOpenOrders();
       const bracketOrders = openOrders.filter(
-        (o) => o.conid === conid && (o.origOrderType === 'LMT' || o.origOrderType === 'STP')
+        (o) => o.conid === conid && (o.origOrderType === 'LIMIT' || o.origOrderType === 'STOP')
       );
       for (const order of bracketOrders) {
         try {

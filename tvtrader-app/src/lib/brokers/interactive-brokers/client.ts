@@ -202,7 +202,12 @@ export class IBClient {
   }
 
   async getOpenOrders(): Promise<IBOpenOrder[]> {
-    return this.request<IBOpenOrder[]>('/v1/api/iserver/account/orders');
+    const data = await this.request<{ orders: IBOpenOrder[] } | IBOpenOrder[]>(
+      '/v1/api/iserver/account/orders'
+    );
+    // API returns { orders: [...] } wrapper
+    if (Array.isArray(data)) return data;
+    return data.orders || [];
   }
 
   async cancelOrder(orderId: string): Promise<{ msg: string }> {
@@ -342,16 +347,20 @@ export interface IBOpenOrder {
   orderDesc: string;
   description1: string;
   status: string;
-  origOrderType: string;
+  origOrderType: string; // "MARKET", "LIMIT", "STOP"
+  orderType: string; // "Market", "Limit", "Stop"
   side: string;
   price: number;
+  auxPrice?: number; // Stop trigger price for STOP orders
+  stop_price?: number; // Also stop trigger price (duplicate of auxPrice)
+  parentId?: number;
   bgColor: string;
   fgColor: string;
   remainingQuantity: number;
   filledQuantity: number;
   avgPrice: number;
   lastExecutionTime_r: number;
-  orderRef: string;
+  order_ref?: string;
 }
 
 export interface IBMarketDataSnapshot {
@@ -366,8 +375,8 @@ export interface IBMarketDataSnapshot {
 export interface IBExecution {
   execution_id: string;
   symbol: string;
-  side: string;
-  order_description: string;
+  side: string; // "B" or "S" (not "BUY"/"SELL")
+  order_description: string; // e.g. "Sold 100 @ 1.15265 on SMART"
   trade_time: string;
   trade_time_r: number;
   size: number;
@@ -377,6 +386,7 @@ export interface IBExecution {
   net_amount: number;
   account: string;
   conid: number;
+  order_id: number; // Matches orderId in open orders — used to classify TP/SL
   clearing_id: string;
   clearing_name: string;
 }
