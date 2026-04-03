@@ -392,7 +392,9 @@ export class IBAdapter implements BrokerAdapter {
       const isTP = orderType === 'LIMIT';
       const isSL = orderType === 'STOP';
       return {
-        brokerTradeId: exec.execution_id,
+        // Use conid as brokerTradeId — consistent with placeMarketOrder which
+        // stores conid as the trade identifier. execution_id is IB-internal.
+        brokerTradeId: String(exec.conid),
         instrument: this.conidToCanonical(exec.conid),
         units: exec.side === 'B' ? exec.size : -exec.size,
         entryPrice: parseFloat(exec.price),
@@ -420,7 +422,7 @@ export class IBAdapter implements BrokerAdapter {
         : exec.order_description;
       return {
         type: 'ORDER_FILL',
-        brokerTradeId: exec.execution_id,
+        brokerTradeId: String(exec.conid),
         tradesClosed: [{
           brokerTradeId: String(exec.conid),
           price: parseFloat(exec.price),
