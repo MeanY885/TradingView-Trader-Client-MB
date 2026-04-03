@@ -432,7 +432,10 @@ export class IBAdapter implements BrokerAdapter {
       client.getTrades(),
       this.getOrderTypeMap(client),
     ]);
-    const exec = executions.find((e) => e.execution_id === brokerTradeId || String(e.conid) === brokerTradeId);
+    // Find the most recent execution for this conid (all trades for the same pair share a conid)
+    const exec = executions
+      .filter((e) => e.execution_id === brokerTradeId || String(e.conid) === brokerTradeId)
+      .sort((a, b) => (b.trade_time_r || 0) - (a.trade_time_r || 0))[0];
     if (exec) {
       const orderType = orderTypeMap.get(exec.order_id);
       return {
@@ -706,12 +709,15 @@ export class IBAdapter implements BrokerAdapter {
         // Position is flat — check executions for the fill price
         try {
           const executions = await client.getTrades();
-          const closeExec = executions.find(
-            (e) => e.conid === pos.conid && e.side === (closeSide === 'BUY' ? 'B' : 'S')
-          );
+          const expectedSide = closeSide === 'BUY' ? 'B' : 'S';
+          // Find the MOST RECENT matching execution — all EUR/USD trades share
+          // the same conid, so .find() would return a stale previous trade.
+          const closeExec = executions
+            .filter((e) => e.conid === pos.conid && e.side === expectedSide)
+            .sort((a, b) => (b.trade_time_r || 0) - (a.trade_time_r || 0))[0];
           if (closeExec) {
             fillPrice = parseFloat(closeExec.price);
-            console.log(`[IB] Close fill confirmed for conid ${pos.conid}: ${fillPrice} (from execution)`);
+            console.log(`[IB] Close fill confirmed for conid ${pos.conid}: ${fillPrice} (from execution ${closeExec.execution_id})`);
           }
         } catch { /* fall through to snapshot fallback */ }
         break;
