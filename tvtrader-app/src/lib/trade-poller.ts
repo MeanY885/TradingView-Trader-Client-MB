@@ -71,7 +71,7 @@ async function syncMissingOpenTrades(): Promise<void> {
 async function runPeakTracking(): Promise<void> {
   try {
     const result = await query<Trade>(
-      `SELECT * FROM trades WHERE status = 'exited' AND peak_tracking_done = false`
+      `SELECT * FROM trades WHERE status IN ('exited', 'loss_exited') AND peak_tracking_done = false`
     );
     if (result.rows.length === 0) return;
 
@@ -197,7 +197,7 @@ async function runTradeChecks(): Promise<number> {
               // Compute P/L from prices — more reliable than broker-reported values
               const closePL     = closePrice ? await computeRealizedPL(trade, closePrice) : (closeResult.realizedPL?.toString() || '0');
               await query(
-                `UPDATE trades SET status = 'exited', close_price = $1, realized_pl = $2, closed_at = NOW(), peak_tracking_done = false WHERE id = $3`,
+                `UPDATE trades SET status = 'loss_exited', close_price = $1, realized_pl = $2, closed_at = NOW(), peak_tracking_done = false WHERE id = $3`,
                 [closePrice, closePL, trade.id]
               );
               await query(

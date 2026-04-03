@@ -64,7 +64,7 @@ export async function GET(request: Request) {
       `SELECT instrument, direction, status, realized_pl,
               entry_price, close_price, highest_price, lowest_price, notional_account_ccy
        FROM trades
-       WHERE status IN ('tp_hit', 'sl_hit', 'exited')
+       WHERE status IN ('tp_hit', 'sl_hit', 'exited', 'loss_exited')
        ORDER BY created_at ASC`
     );
     const settings = await getSettings();

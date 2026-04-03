@@ -695,9 +695,45 @@ export class IBAdapter implements BrokerAdapter {
     // Handle confirmation if needed
     await this.handleOrderConfirmations(client, response);
 
+    // Poll for actual fill price — pos.mktPrice above is stale (read before close order).
+    // Wait for the position to go flat, then check executions for the real fill.
+    let fillPrice: number | undefined;
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      const currentPositions = await client.getPositions();
+      const current = currentPositions.find((p) => p.conid === pos.conid);
+      if (!current || current.position === 0) {
+        // Position is flat — check executions for the fill price
+        try {
+          const executions = await client.getTrades();
+          const closeExec = executions.find(
+            (e) => e.conid === pos.conid && e.side === (closeSide === 'BUY' ? 'B' : 'S')
+          );
+          if (closeExec) {
+            fillPrice = parseFloat(closeExec.price);
+            console.log(`[IB] Close fill confirmed for conid ${pos.conid}: ${fillPrice} (from execution)`);
+          }
+        } catch { /* fall through to snapshot fallback */ }
+        break;
+      }
+    }
+
+    // Fallback: use live snapshot price if execution not found
+    if (!fillPrice) {
+      const instrument = this.conidToCanonical(pos.conid);
+      try {
+        const pricing = await this.getPricing(instrument);
+        fillPrice = (pricing.ask + pricing.bid) / 2;
+        console.log(`[IB] Close fill fallback for ${instrument}: ${fillPrice} (from snapshot)`);
+      } catch {
+        fillPrice = pos.mktPrice || undefined;
+        console.log(`[IB] Close fill last-resort for conid ${pos.conid}: ${fillPrice} (from stale mktPrice)`);
+      }
+    }
+
     return {
-      fillPrice: pos.mktPrice || undefined,
-      realizedPL: pos.realizedPnl || undefined,
+      fillPrice,
+      realizedPL: undefined, // Let caller compute from entry/close prices
     };
   }
 

@@ -427,6 +427,7 @@ const STATUS_LABELS: Record<string, { text: string; color: string }> = {
   tp_hit: { text: 'TP Hit', color: 'text-green' },
   sl_hit: { text: 'SL Hit', color: 'text-red' },
   exited: { text: 'Profit Exit', color: 'text-accent' },
+  loss_exited: { text: 'Loss Exit', color: 'text-red' },
   exited_no_tp: { text: 'No TP', color: 'text-red' },
   exited_no_sl: { text: 'No SL', color: 'text-red' },
   open: { text: 'Open', color: 'text-muted' },

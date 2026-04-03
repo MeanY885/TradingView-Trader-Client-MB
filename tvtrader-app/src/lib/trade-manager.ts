@@ -74,7 +74,7 @@ async function getActiveTradeForInstrument(instrument: string): Promise<Trade | 
 async function finalisePeakTracking(instrument: string): Promise<void> {
   try {
     const result = await query<Trade>(
-      `SELECT * FROM trades WHERE status = 'exited' AND peak_tracking_done = false AND instrument = $1`,
+      `SELECT * FROM trades WHERE status IN ('exited', 'loss_exited') AND peak_tracking_done = false AND instrument = $1`,
       [instrument]
     );
     if (result.rows.length === 0) return;
@@ -308,6 +308,8 @@ export async function handleTpSl(signal: WebhookSignal): Promise<{ success: bool
       const { status: closedStatus } = recent.rows[0];
       const reason = closedStatus === 'exited'
         ? 'already_profit_exited'
+        : closedStatus === 'loss_exited'
+        ? 'already_loss_exited'
         : closedStatus === 'tp_hit'
         ? 'already_tp_hit'
         : closedStatus === 'sl_hit'

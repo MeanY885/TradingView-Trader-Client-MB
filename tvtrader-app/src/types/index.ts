@@ -19,7 +19,7 @@ export interface Trade {
   sl_price: string;
   spread_at_entry: string;
   slippage_pips: string;
-  status: 'open' | 'tp_hit' | 'sl_hit' | 'exited' | 'exited_no_tp' | 'exited_no_sl';
+  status: 'open' | 'tp_hit' | 'sl_hit' | 'exited' | 'loss_exited' | 'exited_no_tp' | 'exited_no_sl';
   peak_tracking_done: boolean;
   highest_price: string | null;
   lowest_price: string | null;
