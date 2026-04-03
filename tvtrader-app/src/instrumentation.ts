@@ -48,7 +48,7 @@ async function runSchemaSetup() {
   await query(`
     CREATE TABLE IF NOT EXISTS signal_log (
       id          SERIAL PRIMARY KEY,
-      action      VARCHAR(10)  NOT NULL,
+      action      VARCHAR(30)  NOT NULL,
       instrument  VARCHAR(20),
       payload     JSONB        NOT NULL,
       result      VARCHAR(50)  NOT NULL,
