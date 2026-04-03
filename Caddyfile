@@ -4,7 +4,7 @@
     }
 }
 
-:80, :443 {
+oanda.onlinesolution24.com {
     # IB Client Portal Gateway — route gateway-specific paths directly
     # These paths don't overlap with app routes (/api/*, /settings, /signals, etc.)
     @gateway path /sso/* /ssodh/* /oauth/* /portal/* /portal.proxy/* /tickle /demo/* /credential.recovery/* /css/* /scripts/* /images/* /lib/* /en/* /fonts/* /Universal/*
