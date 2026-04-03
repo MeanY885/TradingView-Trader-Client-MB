@@ -13,7 +13,7 @@ import { getBroker } from './brokers/factory';
 import { syncTradeWithBroker, computeRealizedPL } from './trade-manager';
 import { Trade } from '../types';
 
-const POLL_ACTIVE_MS = 2_000;   // while trade(s) open
+const POLL_ACTIVE_MS = 800;     // while trade(s) open — sub-second for fast exit detection
 const POLL_IDLE_MS   = 10_000;  // no open trades
 
 /**
