@@ -15,6 +15,10 @@ oanda.onlinesolution24.com {
                 tls_insecure_skip_verify
                 versions 1.1
             }
+            # Strip upstream cache headers to prevent stale JS after gateway restarts
+            header_down -ETag
+            header_down -Last-Modified
+            header_down Cache-Control "no-store"
         }
     }
 
