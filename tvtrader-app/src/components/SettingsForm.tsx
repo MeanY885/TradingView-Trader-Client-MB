@@ -583,7 +583,7 @@ export default function SettingsForm() {
                     {ibReauthMsg}
                   </span>
                 ) : ibGatewayStatus?.authenticated
-                  ? 'Session is active. It will be kept alive automatically. IB requires re-login approximately once per day during scheduled maintenance.'
+                  ? 'Session is active. It will be kept alive automatically. IB requires manual re-login once per week (Sunday). Daily maintenance around 01:00 ET may briefly disconnect — click Re-authenticate to restore.'
                   : 'Opens the IB gateway login page. Log in with your IB credentials and 2FA — this page will update automatically when login succeeds.'}
               </p>
             </div>
