@@ -63,6 +63,10 @@ export class IBAdapter implements BrokerAdapter {
     this.authManager = new IBAuthManager(gatewayUrl);
     this.client = new IBClient({ gatewayUrl, accountId });
     this.keepalive = new IBKeepalive(gatewayUrl);
+
+    // Wire keepalive into client so it can auto-recover on 401 / "accounts first"
+    this.client.setKeepalive(this.keepalive);
+
     this.keepalive.start();
     this.connected = true;
 
@@ -70,6 +74,8 @@ export class IBAdapter implements BrokerAdapter {
     // The user may not have logged in yet. Auth errors will surface on actual API calls.
     try {
       await this.authManager.ensureAuthenticated();
+      // Initialize accounts endpoint (required before portfolio/order calls)
+      await this.keepalive.initializeAccounts();
       console.log(`[IB] Connected and authenticated via gateway at ${gatewayUrl} (account: ${accountId})`);
       // Suppress common order warnings that block bracket order placement
       await this.client.suppressOrderWarnings();

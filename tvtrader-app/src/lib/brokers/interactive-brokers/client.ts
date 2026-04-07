@@ -11,6 +11,7 @@
 
 import { BrokerError, BrokerAuthError, BrokerConnectionError } from '../errors';
 import { ibGatewayFetch } from './gateway-fetch';
+import type { IBKeepalive } from './keepalive';
 
 export interface IBClientConfig {
   gatewayUrl: string;  // e.g. http://localhost:5000 or http://ib-gateway:5000
@@ -19,9 +20,16 @@ export interface IBClientConfig {
 
 export class IBClient {
   private config: IBClientConfig;
+  /** Reference to keepalive for triggering recovery on auth failures */
+  private keepalive: IBKeepalive | null = null;
 
   constructor(config: IBClientConfig) {
     this.config = config;
+  }
+
+  /** Attach keepalive so the client can trigger recovery on auth failures */
+  setKeepalive(keepalive: IBKeepalive): void {
+    this.keepalive = keepalive;
   }
 
   get accountId(): string {
@@ -36,6 +44,27 @@ export class IBClient {
     path: string,
     options: RequestInit = {},
   ): Promise<T> {
+    const result = await this.doRequest<T>(path, options);
+
+    // Auto-retry on recoverable auth/session errors
+    if (result.needsRetry) {
+      console.log(`[IB] Auto-retrying ${path} after session recovery`);
+      const retry = await this.doRequest<T>(path, options);
+      if (retry.needsRetry) {
+        // Recovery didn't help — throw the original error
+        throw retry.error!;
+      }
+      return retry.value!;
+    }
+
+    if (result.error) throw result.error;
+    return result.value!;
+  }
+
+  private async doRequest<T>(
+    path: string,
+    options: RequestInit = {},
+  ): Promise<{ value?: T; error?: Error; needsRetry?: boolean }> {
     const url = `${this.config.gatewayUrl}${path}`;
     let res: Response;
     try {
@@ -47,33 +76,56 @@ export class IBClient {
         },
       });
     } catch (e) {
-      throw new BrokerConnectionError(
-        'interactive_brokers',
-        `Cannot reach IB Gateway at ${this.config.gatewayUrl}: ${e}`,
-        e,
-      );
+      return {
+        error: new BrokerConnectionError(
+          'interactive_brokers',
+          `Cannot reach IB Gateway at ${this.config.gatewayUrl}: ${e}`,
+          e,
+        ),
+      };
     }
 
     if (res.status === 401) {
-      throw new BrokerAuthError(
-        'interactive_brokers',
-        'IB Gateway session expired. Please log in again at the gateway URL.',
-      );
+      // Try to recover the session before failing
+      if (this.keepalive) {
+        console.warn(`[IB] 401 on ${path} — attempting session recovery`);
+        this.keepalive.resetAccountsInit();
+        await this.keepalive.initializeAccounts();
+      }
+      return {
+        error: new BrokerAuthError(
+          'interactive_brokers',
+          'IB Gateway session expired. Please log in again at the gateway URL.',
+        ),
+        needsRetry: !!this.keepalive,
+      };
     }
 
     if (!res.ok) {
       const text = await res.text();
-      throw new BrokerError(
-        `IB Gateway error ${res.status}: ${text}`,
-        'interactive_brokers',
-        `HTTP_${res.status}`,
-        res.status >= 500,
-      );
+
+      // "Please query /accounts first" — auto-recover by calling accounts
+      if (res.status === 500 && text.includes('Please query /accounts first')) {
+        if (this.keepalive) {
+          console.warn(`[IB] "accounts first" error on ${path} — initializing accounts`);
+          await this.keepalive.initializeAccounts();
+          return { needsRetry: true };
+        }
+      }
+
+      return {
+        error: new BrokerError(
+          `IB Gateway error ${res.status}: ${text}`,
+          'interactive_brokers',
+          `HTTP_${res.status}`,
+          res.status >= 500,
+        ),
+      };
     }
 
     const text = await res.text();
-    if (!text) return {} as T;
-    return JSON.parse(text) as T;
+    if (!text) return { value: {} as T };
+    return { value: JSON.parse(text) as T };
   }
 
   // --- Session ---
