@@ -1125,7 +1125,7 @@ export default function SettingsForm() {
           <p className="text-[11px] text-muted mt-1">127.0.0.1, 10.0.0.0/8, 192.168.0.0/16</p>
         </div>
 
-        {/* Custom IP input */}
+        {/* Custom IP / hostname input */}
         <div className="flex gap-2 mb-4 max-w-sm">
           <input
             type="text"
@@ -1133,7 +1133,7 @@ export default function SettingsForm() {
             onChange={(e) => setIpInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && addIp()}
             className="flex-1 bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
-            placeholder="e.g. 203.0.113.42"
+            placeholder="e.g. 203.0.113.42 or ddns.example.com"
           />
           <button
             onClick={addIp}
@@ -1142,16 +1142,23 @@ export default function SettingsForm() {
             Add
           </button>
         </div>
+        <p className="text-[11px] text-muted -mt-3 mb-4">Supports IPs, CIDR ranges, and dynamic DNS hostnames (resolved every 60s).</p>
 
         {/* IP list */}
         {ipList.length > 0 && (
           <ul className="space-y-1 mb-5 max-w-sm">
-            {ipList.map((ip) => (
-              <li key={ip} className="flex items-center justify-between bg-background border border-card-border rounded px-3 py-1.5">
-                <span className="text-sm font-mono text-foreground">{ip}</span>
-                <button onClick={() => removeIp(ip)} className="text-muted hover:text-red transition-colors text-xs ml-4">Remove</button>
-              </li>
-            ))}
+            {ipList.map((ip) => {
+              const isDns = /[a-zA-Z]/.test(ip) && ip.includes('.');
+              return (
+                <li key={ip} className="flex items-center justify-between bg-background border border-card-border rounded px-3 py-1.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-sm font-mono text-foreground truncate">{ip}</span>
+                    {isDns && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30">DNS</span>}
+                  </div>
+                  <button onClick={() => removeIp(ip)} className="text-muted hover:text-red transition-colors text-xs ml-4 shrink-0">Remove</button>
+                </li>
+              );
+            })}
           </ul>
         )}
 
