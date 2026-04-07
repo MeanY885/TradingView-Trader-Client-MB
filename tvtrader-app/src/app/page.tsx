@@ -49,6 +49,8 @@ interface Trade {
   effective_profit_target?: string | null;
   loss_exit_price?: string | null;
   effective_loss_target?: string | null;
+  subsequent_outcome?: string | null;
+  subsequent_pl?: string | null;
 }
 
 function AccountCards({ data }: { data: AccountData | null }) {
@@ -561,7 +563,18 @@ function TradeHistory({ trades, onDelete, onClearAll, sym }: { trades: Trade[]; 
                         {pl >= 0 ? '+' : '-'}{sym}{Math.abs(pl).toFixed(2)}
                       </span>
                     </td>
-                    <td className={`pt-2.5 pb-1 pr-3 text-sm ${label.color}`}>{label.text}</td>
+                    <td className={`pt-2.5 pb-1 pr-3 text-sm ${label.color}`}>
+                      {label.text}
+                      {trade.subsequent_outcome && (
+                        <span className={`block text-xs mt-0.5 font-medium ${trade.subsequent_outcome === 'tp_hit' ? 'text-green' : trade.subsequent_outcome === 'sl_hit' ? 'text-red' : 'text-muted'}`}>
+                          {'\u2192 '}{trade.subsequent_outcome === 'tp_hit' ? 'TP Hit' : trade.subsequent_outcome === 'sl_hit' ? 'SL Hit' : 'Exited'}
+                          {trade.subsequent_pl != null && (() => {
+                            const spv = parseFloat(trade.subsequent_pl as string);
+                            return ` (${spv >= 0 ? '+' : ''}${sym}${Math.abs(spv).toFixed(0)})`;
+                          })()}
+                        </span>
+                      )}
+                    </td>
                     <td className="pt-2.5 pb-1 pr-3 text-muted tabular-nums text-xs">
                       {new Date(trade.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                     </td>

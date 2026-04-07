@@ -31,6 +31,8 @@ export interface Trade {
   effective_profit_target?: string | null;
   loss_exit_price?: string | null;
   effective_loss_target?: string | null;
+  subsequent_outcome?: string | null;
+  subsequent_pl?: string | null;
   realized_pl: string | null;
   close_price: string | null;
   closed_at: string | null;

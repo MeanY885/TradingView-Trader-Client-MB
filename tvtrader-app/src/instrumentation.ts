@@ -183,6 +183,10 @@ async function runMigrations() {
   }
 
   await query(`ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS broker VARCHAR(30) DEFAULT 'oanda'`);
+
+  // Post-exit tracking: record what happened after an early profit/loss exit
+  await query(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS subsequent_outcome varchar(20) DEFAULT NULL`);
+  await query(`ALTER TABLE trades ADD COLUMN IF NOT EXISTS subsequent_pl text DEFAULT NULL`);
 }
 
 export async function register() {

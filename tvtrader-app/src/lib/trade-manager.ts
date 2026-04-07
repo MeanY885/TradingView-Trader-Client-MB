@@ -10,6 +10,23 @@ function formatPrice(price: string, instrument: string): string {
   return parseFloat(price).toFixed(getInstrumentPrecision(instrument));
 }
 
+/**
+ * Estimates the account-currency P/L a trade would have realised if it had closed
+ * at targetPrice instead of the actual close_price, scaling from realized_pl.
+ */
+function calculateSubsequentPl(trade: { entry_price: string; close_price: string | null; realized_pl: string | null; direction: string }, targetPrice: string): string | null {
+  const entry = parseFloat(trade.entry_price);
+  const close = parseFloat(trade.close_price || '0');
+  const realPl = parseFloat(trade.realized_pl || '0');
+  if (!close || close === entry || !realPl) return null;
+  const isBuy = trade.direction === 'buy';
+  const closeMove = isBuy ? close - entry : entry - close;
+  if (closeMove === 0) return null;
+  const target = parseFloat(targetPrice);
+  const targetMove = isBuy ? target - entry : entry - target;
+  return (realPl * (targetMove / closeMove)).toFixed(2);
+}
+
 // Returns the price of 1 unit of the base currency in account currency (e.g. 1 XAU in GBP)
 async function getUnitPriceInAccountCurrency(broker: BrokerAdapter, instrument: string, midPrice: number, accountCurrency: string): Promise<number> {
   const quoteCurrency = instrument.split('_')[1]; // EUR_USD -> USD, XAU_USD -> USD, NZD_JPY -> JPY
@@ -299,13 +316,15 @@ export async function handleTpSl(signal: WebhookSignal): Promise<{ success: bool
   const trade = await getActiveTradeForInstrument(signal.instrument);
   if (!trade) {
     // Check if the trade was already closed — not an error, just late/redundant webhook
-    const recent = await query<{ status: string; closed_at: string }>(
-      `SELECT status, closed_at FROM trades WHERE instrument = $1 AND status != 'open'
+    const recent = await query<{ id: number; status: string; closed_at: string; entry_price: string; close_price: string | null; realized_pl: string | null; direction: string; tp_price: string; sl_price: string }>(
+      `SELECT id, status, closed_at, entry_price, close_price, realized_pl, direction, tp_price, sl_price
+       FROM trades WHERE instrument = $1 AND status != 'open'
        ORDER BY closed_at DESC LIMIT 1`,
       [signal.instrument]
     );
     if (recent.rows.length > 0) {
-      const { status: closedStatus } = recent.rows[0];
+      const closedTrade = recent.rows[0];
+      const { id: closedId, status: closedStatus } = closedTrade;
       const reason = closedStatus === 'exited'
         ? 'already_profit_exited'
         : closedStatus === 'loss_exited'
@@ -315,6 +334,23 @@ export async function handleTpSl(signal: WebhookSignal): Promise<{ success: bool
         : closedStatus === 'sl_hit'
         ? 'already_sl_hit'
         : 'already_closed';
+
+      // Record what happened after an early exit (profit or loss exit)
+      if (closedStatus === 'exited' || closedStatus === 'loss_exited') {
+        const outcome = ['tp1', 'tp2', 'tp3'].includes(signal.action) ? 'tp_hit'
+          : signal.action === 'sl' ? 'sl_hit'
+          : signal.action === 'exit' ? 'exit'
+          : null;
+        if (outcome) {
+          const targetPrice = ['tp1', 'tp2', 'tp3'].includes(signal.action) ? closedTrade.tp_price : closedTrade.sl_price;
+          const subPl = calculateSubsequentPl(closedTrade, targetPrice);
+          await query(
+            `UPDATE trades SET subsequent_outcome = $1, subsequent_pl = $2 WHERE id = $3 AND subsequent_outcome IS NULL`,
+            [outcome, subPl, closedId]
+          );
+        }
+      }
+
       await logSignal(signal, reason, true, `Trade was already closed on Exchange before webhook arrived (${closedStatus})`);
       await finalisePeakTracking(signal.instrument);
       return { success: true, message: `Acknowledged — trade already closed as ${closedStatus}` };
@@ -403,13 +439,24 @@ export async function handleTpSl(signal: WebhookSignal): Promise<{ success: bool
 export async function handleExit(signal: WebhookSignal): Promise<{ success: boolean; message: string }> {
   const trade = await getActiveTradeForInstrument(signal.instrument);
   if (!trade) {
-    const recent = await query<{ status: string }>(
-      `SELECT status FROM trades WHERE instrument = $1 AND status != 'open'
+    const recent = await query<{ id: number; status: string; entry_price: string; close_price: string | null; realized_pl: string | null; direction: string; tp_price: string; sl_price: string }>(
+      `SELECT id, status, entry_price, close_price, realized_pl, direction, tp_price, sl_price
+       FROM trades WHERE instrument = $1 AND status != 'open'
        ORDER BY closed_at DESC LIMIT 1`,
       [signal.instrument]
     );
     if (recent.rows.length > 0) {
-      const { status: closedStatus } = recent.rows[0];
+      const closedTrade = recent.rows[0];
+      const { id: closedId, status: closedStatus } = closedTrade;
+
+      // Record exit as subsequent outcome if trade was early-exited
+      if (closedStatus === 'exited' || closedStatus === 'loss_exited') {
+        await query(
+          `UPDATE trades SET subsequent_outcome = 'exit' WHERE id = $1 AND subsequent_outcome IS NULL`,
+          [closedId]
+        );
+      }
+
       await logSignal(signal, 'already_closed', true, `Trade was already closed on Exchange before webhook arrived (${closedStatus})`);
       await finalisePeakTracking(signal.instrument);
       return { success: true, message: `Acknowledged — trade already closed as ${closedStatus}` };
@@ -421,9 +468,16 @@ export async function handleExit(signal: WebhookSignal): Promise<{ success: bool
   try {
     const broker = await getBroker();
     const closeResult = await broker.closeTrade(trade.broker_trade_id);
-    const closePrice = closeResult.fillPrice?.toString() || '';
+    let closePrice = closeResult.fillPrice?.toString() || '';
+    // Fallback: use live mid price if broker didn't return a fill (position already flat)
+    if (!closePrice) {
+      try {
+        const pricing = await broker.getPricing(trade.instrument);
+        closePrice = ((pricing.ask + pricing.bid) / 2).toString();
+      } catch { /* no pricing available */ }
+    }
     // Compute P/L from prices — more reliable than broker-reported values
-    const closePL = closePrice ? await computeRealizedPL(trade, closePrice) : (closeResult.realizedPL?.toString() || '');
+    const closePL = closePrice ? await computeRealizedPL(trade, closePrice) : (closeResult.realizedPL?.toString() || '0');
     await query(
       'UPDATE trades SET status = \'exited\', close_price = $1, realized_pl = $2, closed_at = NOW() WHERE id = $3',
       [closePrice, closePL, trade.id]

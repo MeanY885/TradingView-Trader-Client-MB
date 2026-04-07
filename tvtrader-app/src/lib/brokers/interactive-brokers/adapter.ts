@@ -495,12 +495,21 @@ export class IBAdapter implements BrokerAdapter {
         unrealizedPL: 0,
         state: 'CLOSED' as const,
         realizedPL: exec.net_amount,
-        closeTime: exec.trade_time,
+        closeTime: this.parseIBTimestamp(exec.trade_time),
         averageClosePrice: parseFloat(exec.price),
         takeProfitFilled: isTP,
         stopLossFilled: isSL,
       };
     });
+  }
+
+  /** Convert IB timestamp "20260403-14:13:31" to ISO format for PostgreSQL. */
+  private parseIBTimestamp(ts: string | undefined): string | undefined {
+    if (!ts) return undefined;
+    // IB format: "YYYYMMDD-HH:mm:ss"
+    const m = ts.match(/^(\d{4})(\d{2})(\d{2})-(\d{2}:\d{2}:\d{2})$/);
+    if (m) return `${m[1]}-${m[2]}-${m[3]}T${m[4]}Z`;
+    return ts; // already ISO or unknown format — pass through
   }
 
   async getTransactionsSinceId(_id: string): Promise<TransactionRecord[]> {
@@ -525,7 +534,7 @@ export class IBAdapter implements BrokerAdapter {
         reason,
         price: parseFloat(exec.price),
         realizedPL: exec.net_amount,
-        time: exec.trade_time,
+        time: this.parseIBTimestamp(exec.trade_time),
       };
     });
   }
@@ -689,7 +698,25 @@ export class IBAdapter implements BrokerAdapter {
 
     const pos = positions.find((p) => String(p.conid) === brokerTradeId);
     if (!pos || pos.position === 0) {
-      return { fillPrice: undefined, realizedPL: undefined };
+      // Position already flat (e.g. bracket TP/SL filled before exit signal arrived).
+      // Try to recover the actual fill price from recent executions.
+      let fillPrice: number | undefined;
+      try {
+        const executions = await client.getTrades();
+        const recentExec = executions
+          .filter((e) => e.conid === conid)
+          .sort((a, b) => (b.trade_time_r || 0) - (a.trade_time_r || 0))[0];
+        if (recentExec) fillPrice = parseFloat(recentExec.price);
+      } catch { /* fall through to snapshot */ }
+      if (!fillPrice) {
+        const instrument = this.conidToCanonical(conid);
+        try {
+          const pricing = await this.getPricing(instrument);
+          fillPrice = (pricing.ask + pricing.bid) / 2;
+        } catch { /* give up */ }
+      }
+      console.log(`[IB] closeTrade ${brokerTradeId} — position already flat, recovered fill: ${fillPrice}`);
+      return { fillPrice, realizedPL: undefined };
     }
 
     const closeSide = pos.position > 0 ? 'SELL' : 'BUY';
