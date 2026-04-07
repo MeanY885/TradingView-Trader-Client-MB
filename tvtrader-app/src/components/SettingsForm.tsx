@@ -189,6 +189,7 @@ export default function SettingsForm() {
   const [ipList, setIpList] = useState<string[]>([]);
   const [ipInput, setIpInput] = useState('');
   const [ipMsg, setIpMsg] = useState('');
+  const [dnsResolved, setDnsResolved] = useState<Record<string, string[]>>({});
   const [sslStatus, setSslStatus] = useState<{
     configured: boolean;
     domain?: string;
@@ -220,6 +221,17 @@ export default function SettingsForm() {
       }
     }).catch(() => {});
   }, []);
+
+  // Resolve DNS hostnames in the allowlist
+  useEffect(() => {
+    const hostnames = ipList.filter((e) => /[a-zA-Z]/.test(e) && e.includes('.'));
+    if (hostnames.length === 0) { setDnsResolved({}); return; }
+    fetch('/api/dns-resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hostnames }),
+    }).then((r) => r.json()).then((d) => setDnsResolved(d.resolved || {})).catch(() => {});
+  }, [ipList]);
 
   // Poll IB gateway status every 30s when IB is selected
   useEffect(() => {
@@ -1149,11 +1161,17 @@ export default function SettingsForm() {
           <ul className="space-y-1 mb-5 max-w-sm">
             {ipList.map((ip) => {
               const isDns = /[a-zA-Z]/.test(ip) && ip.includes('.');
+              const resolvedIps = isDns ? dnsResolved[ip] : undefined;
               return (
                 <li key={ip} className="flex items-center justify-between bg-background border border-card-border rounded px-3 py-1.5">
-                  <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0 flex-wrap">
                     <span className="text-sm font-mono text-foreground truncate">{ip}</span>
                     {isDns && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent border border-accent/30">DNS</span>}
+                    {isDns && resolvedIps !== undefined && (
+                      <span className="text-[11px] text-muted font-mono">
+                        {resolvedIps.length > 0 ? `\u2192 ${resolvedIps.join(', ')}` : '\u2192 unresolved'}
+                      </span>
+                    )}
                   </div>
                   <button onClick={() => removeIp(ip)} className="text-muted hover:text-red transition-colors text-xs ml-4 shrink-0">Remove</button>
                 </li>

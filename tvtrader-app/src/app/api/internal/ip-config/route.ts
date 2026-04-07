@@ -36,17 +36,22 @@ export async function GET() {
 
     // Separate IPs/CIDRs from hostnames, resolve hostnames to IPs
     const ips: string[] = [];
+    const resolved: Record<string, string[]> = {};
     for (const entry of entries) {
       if (isHostname(entry)) {
-        const resolved = await resolveHostname(entry);
-        ips.push(...resolved);
+        const addrs = await resolveHostname(entry);
+        ips.push(...addrs);
+        resolved[entry] = addrs;
       } else {
         ips.push(entry);
       }
     }
 
-    return NextResponse.json({ enabled, ips });
+    return NextResponse.json({ enabled, ips, resolved });
   } catch {
-    return NextResponse.json({ enabled: false, ips: [] });
+    return NextResponse.json({ enabled: false, ips: [], resolved: {} });
   }
 }
+
+/** Exported for use by sibling API routes */
+export { resolveHostname, isHostname };
