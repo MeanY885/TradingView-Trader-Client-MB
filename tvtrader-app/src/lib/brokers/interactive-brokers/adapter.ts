@@ -27,7 +27,7 @@ import {
 import { INSTRUMENTS, InstrumentConfig } from '../instruments';
 import { IBClient, IBOrderRequest, IBOrderResponse } from './client';
 import { IBAuthManager } from './auth';
-import { IBKeepalive } from './keepalive';
+import { IBKeepalive, ReauthEvent } from './keepalive';
 import { getSettings } from '../../db';
 
 const DEFAULT_GATEWAY_URL = process.env.IB_GATEWAY_URL || 'http://localhost:5000';
@@ -95,6 +95,11 @@ export class IBAdapter implements BrokerAdapter {
 
   isConnected(): boolean {
     return this.connected;
+  }
+
+  /** Returns the re-authentication event log from the keepalive */
+  getReauthLog(): ReauthEvent[] {
+    return this.keepalive?.getReauthLog() ?? [];
   }
 
   private getClient(): IBClient {

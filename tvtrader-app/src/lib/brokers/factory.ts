@@ -61,3 +61,11 @@ export async function resetBrokerCache(): Promise<void> {
   cachedAdapter = null;
   cachedBrokerType = null;
 }
+
+/**
+ * Returns the cached adapter without connecting. Used for accessing
+ * adapter-specific features like the IB re-auth log.
+ */
+export function getCachedAdapter(): BrokerAdapter | null {
+  return cachedAdapter;
+}

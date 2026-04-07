@@ -29,6 +29,15 @@ interface TickleResponse {
   isPending?: boolean;    // login pending
 }
 
+export interface ReauthEvent {
+  timestamp: string;  // ISO 8601
+  success: boolean;
+  method: string;     // e.g. "SSO validate", "reauthenticate", "proactive SSO refresh"
+  detail?: string;
+}
+
+const MAX_REAUTH_LOG = 100; // keep last 100 events
+
 export class IBKeepalive {
   private tickleTimer: ReturnType<typeof setInterval> | null = null;
   private authCheckTimer: ReturnType<typeof setInterval> | null = null;
@@ -37,6 +46,8 @@ export class IBKeepalive {
   private consecutiveAuthFailures = 0;
   /** Whether accounts endpoint has been called after the last successful auth */
   private accountsInitialized = false;
+  /** In-memory log of re-authentication events */
+  private reauthLog: ReauthEvent[] = [];
 
   constructor(gatewayUrl: string) {
     this.gatewayUrl = gatewayUrl;
@@ -86,7 +97,9 @@ export class IBKeepalive {
 
       // If SSO is expiring soon (< 10 min), proactively revalidate
       if (data.ssoExpires !== undefined && data.ssoExpires < 10 * 60_000) {
-        console.warn(`[IB-KEEPALIVE] SSO expiring in ${Math.round(data.ssoExpires / 1000)}s — triggering proactive revalidation`);
+        const secsLeft = Math.round(data.ssoExpires / 1000);
+        console.warn(`[IB-KEEPALIVE] SSO expiring in ${secsLeft}s — triggering proactive revalidation`);
+        this.recordReauth(true, 'Proactive SSO refresh', `SSO token expiring in ${secsLeft}s — refreshing preemptively`);
         await this.attemptRecovery();
       }
     } catch (e) {
@@ -154,6 +167,7 @@ export class IBKeepalive {
       if (status.authenticated && status.connected) {
         console.log('[IB-KEEPALIVE] SSO validate restored session');
         this.consecutiveAuthFailures = 0;
+        this.recordReauth(true, 'SSO validate', 'Session restored via /sso/validate');
         await this.initializeAccounts();
         return;
       }
@@ -170,6 +184,7 @@ export class IBKeepalive {
       if (status.authenticated && status.connected) {
         console.log('[IB-KEEPALIVE] Reauthenticate restored session');
         this.consecutiveAuthFailures = 0;
+        this.recordReauth(true, 'Reauthenticate', 'Session restored via /iserver/reauthenticate');
         await this.initializeAccounts();
         return;
       }
@@ -185,12 +200,15 @@ export class IBKeepalive {
       if (status.authenticated && status.connected) {
         console.log('[IB-KEEPALIVE] Second SSO validate restored session');
         this.consecutiveAuthFailures = 0;
+        this.recordReauth(true, 'SSO validate (retry)', 'Session restored on second SSO validate attempt');
         await this.initializeAccounts();
         return;
       }
 
+      this.recordReauth(false, 'All methods failed', 'Manual browser login required');
       console.error('[IB-KEEPALIVE] Recovery failed — manual browser login required');
     } catch (e) {
+      this.recordReauth(false, 'Recovery error', String(e));
       console.error('[IB-KEEPALIVE] Recovery error:', e);
     }
   }
@@ -219,6 +237,24 @@ export class IBKeepalive {
   /** Mark accounts as needing re-initialization (called after auth failure in client) */
   resetAccountsInit(): void {
     this.accountsInitialized = false;
+  }
+
+  /** Returns the re-authentication event log (newest first) */
+  getReauthLog(): ReauthEvent[] {
+    return [...this.reauthLog].reverse();
+  }
+
+  private recordReauth(success: boolean, method: string, detail?: string): void {
+    this.reauthLog.push({
+      timestamp: new Date().toISOString(),
+      success,
+      method,
+      detail,
+    });
+    // Trim to max size
+    if (this.reauthLog.length > MAX_REAUTH_LOG) {
+      this.reauthLog = this.reauthLog.slice(-MAX_REAUTH_LOG);
+    }
   }
 
   // ----------------------------------------------------------------- helpers

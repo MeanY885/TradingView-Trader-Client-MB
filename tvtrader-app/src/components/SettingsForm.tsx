@@ -76,6 +76,92 @@ const PAIRS = [
     pipImpact: (r: FxRates) => 0.01 * r.JPY / r.NZD },
 ];
 
+interface ReauthEvent {
+  timestamp: string;
+  success: boolean;
+  method: string;
+  detail?: string;
+}
+
+function ReauthLog() {
+  const [open, setOpen] = useState(false);
+  const [events, setEvents] = useState<ReauthEvent[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const fetchLog = () => {
+    setLoading(true);
+    fetch('/api/ib-reauth-log')
+      .then((r) => r.json())
+      .then((data) => setEvents(data.events || []))
+      .catch(() => setEvents([]))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    if (open) fetchLog();
+  }, [open]);
+
+  return (
+    <details
+      className="border-t border-card-border pt-3"
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="flex items-center gap-2 cursor-pointer text-xs text-muted hover:text-foreground transition-colors select-none">
+        <svg className={`w-3 h-3 transition-transform ${open ? 'rotate-90' : ''}`} viewBox="0 0 12 12" fill="currentColor">
+          <path d="M4 2l4 4-4 4z" />
+        </svg>
+        Re-authentication Log
+        {events.length > 0 && (
+          <span className="ml-1 px-1.5 py-0.5 rounded-full bg-card-border text-[10px] tabular-nums">{events.length}</span>
+        )}
+        {open && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); fetchLog(); }}
+            className="ml-auto text-[10px] text-muted hover:text-foreground px-2 py-0.5 rounded border border-card-border"
+          >
+            {loading ? '...' : 'Refresh'}
+          </button>
+        )}
+      </summary>
+      <div className="mt-2 max-h-52 overflow-y-auto">
+        {events.length === 0 ? (
+          <p className="text-xs text-muted py-2">No re-authentication events yet. Events will appear here when the keepalive detects and recovers from session drops.</p>
+        ) : (
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-muted border-b border-card-border">
+                <th className="text-left py-1 pr-3 font-medium">Time</th>
+                <th className="text-left py-1 pr-3 font-medium">Status</th>
+                <th className="text-left py-1 pr-3 font-medium">Method</th>
+                <th className="text-left py-1 font-medium">Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {events.map((evt, i) => (
+                <tr key={i} className="border-b border-card-border/50">
+                  <td className="py-1.5 pr-3 text-muted tabular-nums whitespace-nowrap">
+                    {new Date(evt.timestamp).toLocaleString()}
+                  </td>
+                  <td className="py-1.5 pr-3">
+                    <span className={`inline-flex items-center gap-1 ${evt.success ? 'text-green' : 'text-red'}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${evt.success ? 'bg-green' : 'bg-red'}`} />
+                      {evt.success ? 'OK' : 'FAIL'}
+                    </span>
+                  </td>
+                  <td className="py-1.5 pr-3 text-foreground">{evt.method}</td>
+                  <td className="py-1.5 text-muted">{evt.detail || '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </details>
+  );
+}
+
 export default function SettingsForm() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
@@ -587,6 +673,9 @@ export default function SettingsForm() {
                   : 'Opens the IB gateway login page. Log in with your IB credentials and 2FA — this page will update automatically when login succeeds.'}
               </p>
             </div>
+
+            {/* Re-authentication Log */}
+            <ReauthLog />
           </div>
         )}
 
