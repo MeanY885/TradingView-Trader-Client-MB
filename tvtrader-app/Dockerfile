@@ -14,6 +14,11 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=2000
 
+# Install Chromium for Puppeteer-based IB Gateway auto-login
+RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/server.js ./server.js
 COPY --from=builder /app/.next/static ./.next/static

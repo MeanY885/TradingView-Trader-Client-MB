@@ -32,6 +32,8 @@ interface Settings {
   // IB Client Portal Gateway
   ib_gateway_url?: string;
   ib_account_id?: string;
+  ib_username?: string;
+  hasIbCredentials?: boolean;
   account_currency?: string;
   webhook_domain?: string;
   [key: string]: string | boolean | undefined;
@@ -177,6 +179,8 @@ export default function SettingsForm() {
   const [ibStatusChecking, setIbStatusChecking] = useState(false);
   const [ibReauthInProgress, setIbReauthInProgress] = useState(false);
   const [ibReauthMsg, setIbReauthMsg] = useState('');
+  const [ibPassword, setIbPassword] = useState('');
+  const [showIbPassword, setShowIbPassword] = useState(false);
   const [brokerMsg, setBrokerMsg] = useState('');
   const [balance, setBalance] = useState(0);
   const [balanceInputs, setBalanceInputs] = useState<Record<string, string>>({});
@@ -308,11 +312,13 @@ export default function SettingsForm() {
     } else if (broker === 'interactive_brokers') {
       data.ib_gateway_url = settings.ib_gateway_url || 'http://localhost:5000';
       data.ib_account_id = settings.ib_account_id || '';
+      data.ib_username = settings.ib_username || '';
+      if (ibPassword.trim()) data.ib_password = ibPassword.trim();
     }
 
     const result = await save(data);
     if (result.ok) {
-      setPracticeKey(''); setLiveKey('');
+      setPracticeKey(''); setLiveKey(''); setIbPassword('');
     }
     setApiMsg(result.ok ? 'Saved' : (result.error || 'Error'));
     setTimeout(() => setApiMsg(''), 2000);
@@ -569,6 +575,38 @@ export default function SettingsForm() {
                 placeholder="e.g. DUP652326"
               />
               <p className="text-xs text-muted mt-1">Your IB account ID. For paper trading, use your paper account ID.</p>
+            </div>
+
+            {/* IB Login Credentials for auto-login */}
+            <div className="max-w-md">
+              <label className="block text-xs text-muted mb-1">
+                Username {settings.ib_username && settings.hasIbCredentials && <span className="text-green ml-1">&#10003; Set</span>}
+              </label>
+              <input
+                type="text"
+                value={settings.ib_username || ''}
+                onChange={(e) => setSettings({ ...settings, ib_username: e.target.value })}
+                className="w-full bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
+                placeholder="IB username"
+              />
+            </div>
+            <div className="max-w-md">
+              <label className="block text-xs text-muted mb-1">
+                Password {settings.hasIbCredentials && <span className="text-green ml-1">&#10003; Set</span>}
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type={showIbPassword ? 'text' : 'password'}
+                  value={ibPassword}
+                  onChange={(e) => setIbPassword(e.target.value)}
+                  className="flex-1 bg-background border border-card-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
+                  placeholder={settings.hasIbCredentials ? '••••••••' : 'IB password'}
+                />
+                <button type="button" onClick={() => setShowIbPassword(!showIbPassword)} className="text-muted hover:text-foreground transition-colors p-1">
+                  <EyeIcon open={showIbPassword} />
+                </button>
+              </div>
+              <p className="text-xs text-muted mt-1">Used for automatic re-login when the gateway session expires. Paper/live mode is detected from your account ID.</p>
             </div>
 
             {/* Gateway URL (collapsed by default) */}

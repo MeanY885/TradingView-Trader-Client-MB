@@ -29,6 +29,8 @@ const ALLOWED_KEYS = [
   // Interactive Brokers (Client Portal Gateway)
   'ib_gateway_url',
   'ib_account_id',
+  'ib_username',
+  'ib_password',
   // Broker selection
   'broker',
   'risk_percentage', // fallback for old DB rows
@@ -79,9 +81,11 @@ export async function GET() {
     const hasPracticeKey = !!(raw.practice_api_key || process.env.OANDA_API_KEY_PRACTICE);
     const hasLiveKey = !!(raw.live_api_key || process.env.OANDA_API_KEY_LIVE);
 
-    // Strip secret keys from response (only Oanda API keys are secrets)
-    const { practice_api_key, live_api_key, ...rest } = raw;
-    void practice_api_key; void live_api_key;
+    // Strip secret keys from response
+    const { practice_api_key, live_api_key, ib_password, ...rest } = raw;
+    void practice_api_key; void live_api_key; void ib_password;
+
+    const hasIbCredentials = !!(raw.ib_username && raw.ib_password);
 
     return NextResponse.json({
       ...rest,
@@ -90,9 +94,11 @@ export async function GET() {
       live_account_id: raw.live_account_id || process.env.OANDA_ACCOUNT_ID_LIVE || '',
       hasPracticeKey,
       hasLiveKey,
-      // IB gateway fields (not secrets — just a URL and account ID)
+      // IB gateway fields
       ib_gateway_url: raw.ib_gateway_url || process.env.IB_GATEWAY_URL || 'http://localhost:5000',
       ib_account_id: raw.ib_account_id || '',
+      ib_username: raw.ib_username || '',
+      hasIbCredentials,
     });
   } catch (e) {
     console.error('Settings fetch error:', e);
@@ -202,8 +208,8 @@ export async function PUT(request: Request) {
         }
       }
 
-      // Skip blank API key updates (keep existing)
-      const secretKeys = ['practice_api_key', 'live_api_key'];
+      // Skip blank secret updates (keep existing)
+      const secretKeys = ['practice_api_key', 'live_api_key', 'ib_password'];
       if (secretKeys.includes(key) && !String(value).trim()) {
         continue;
       }
@@ -216,8 +222,10 @@ export async function PUT(request: Request) {
     const hasPracticeKey = !!(updated.practice_api_key || process.env.OANDA_API_KEY_PRACTICE);
     const hasLiveKey = !!(updated.live_api_key || process.env.OANDA_API_KEY_LIVE);
 
-    const { practice_api_key: _pk, live_api_key: _lk, ...rest } = updated;
-    void _pk; void _lk;
+    const { practice_api_key: _pk, live_api_key: _lk, ib_password: _ip, ...rest } = updated;
+    void _pk; void _lk; void _ip;
+
+    const hasIbCredentials = !!(updated.ib_username && updated.ib_password);
 
     return NextResponse.json({
       ...rest,
@@ -228,6 +236,8 @@ export async function PUT(request: Request) {
       hasLiveKey,
       ib_gateway_url: updated.ib_gateway_url || process.env.IB_GATEWAY_URL || 'http://localhost:5000',
       ib_account_id: updated.ib_account_id || '',
+      ib_username: updated.ib_username || '',
+      hasIbCredentials,
     });
   } catch (e) {
     console.error('Settings update error:', e);

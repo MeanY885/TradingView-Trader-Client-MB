@@ -67,6 +67,11 @@ export class IBAdapter implements BrokerAdapter {
     // Wire keepalive into client so it can auto-recover on 401 / "accounts first"
     this.client.setKeepalive(this.keepalive);
 
+    // Configure auto-login credentials if available
+    if (settings.ib_username && settings.ib_password) {
+      this.keepalive.setAutoLoginCredentials(settings.ib_username, settings.ib_password, accountId);
+    }
+
     this.keepalive.start();
     this.connected = true;
 

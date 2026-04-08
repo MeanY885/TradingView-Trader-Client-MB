@@ -16,6 +16,8 @@
  */
 
 import { ibGatewayFetch } from './gateway-fetch';
+import { performAutoLogin } from './auto-login';
+import type { AutoLoginResult } from './auto-login';
 
 const TICKLE_INTERVAL_MS = 55_000;       // 55 seconds
 const AUTH_CHECK_INTERVAL_MS = 3 * 60_000; // 3 minutes
@@ -48,9 +50,16 @@ export class IBKeepalive {
   private accountsInitialized = false;
   /** In-memory log of re-authentication events */
   private reauthLog: ReauthEvent[] = [];
+  /** Credentials for automated browser login (loaded lazily from DB) */
+  private autoLoginCredentials: { username: string; password: string; accountId: string } | null = null;
 
   constructor(gatewayUrl: string) {
     this.gatewayUrl = gatewayUrl;
+  }
+
+  /** Set credentials for automated browser login recovery */
+  setAutoLoginCredentials(username: string, password: string, accountId: string): void {
+    this.autoLoginCredentials = { username, password, accountId };
   }
 
   start(): void {
@@ -205,8 +214,34 @@ export class IBKeepalive {
         return;
       }
 
-      this.recordReauth(false, 'All methods failed', 'Manual browser login required');
-      console.error('[IB-KEEPALIVE] Recovery failed — manual browser login required');
+      // Step 4: Automated browser login via Puppeteer (if credentials are configured)
+      if (this.autoLoginCredentials) {
+        const { username, password, accountId } = this.autoLoginCredentials;
+        console.log('[IB-KEEPALIVE] Recovery step 4 — automated browser login');
+        let loginResult: AutoLoginResult;
+        try {
+          loginResult = await performAutoLogin(this.gatewayUrl, username, password, accountId);
+        } catch (loginErr) {
+          loginResult = { success: false, message: String(loginErr) };
+        }
+
+        if (loginResult.success) {
+          await this.sleep(3000);
+          status = await this.getAuthStatus();
+          if (status.authenticated && status.connected) {
+            console.log('[IB-KEEPALIVE] Automated browser login restored session');
+            this.consecutiveAuthFailures = 0;
+            this.recordReauth(true, 'Auto browser login', loginResult.message);
+            await this.initializeAccounts();
+            return;
+          }
+        }
+        this.recordReauth(false, 'Auto browser login failed', loginResult.message);
+        console.error(`[IB-KEEPALIVE] Auto browser login failed: ${loginResult.message}`);
+      } else {
+        this.recordReauth(false, 'All methods failed', 'Manual browser login required — set IB credentials in settings to enable auto-login');
+        console.error('[IB-KEEPALIVE] Recovery failed — no auto-login credentials configured');
+      }
     } catch (e) {
       this.recordReauth(false, 'Recovery error', String(e));
       console.error('[IB-KEEPALIVE] Recovery error:', e);
