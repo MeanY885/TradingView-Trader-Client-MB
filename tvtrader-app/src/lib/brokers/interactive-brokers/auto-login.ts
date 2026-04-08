@@ -137,44 +137,51 @@ export async function performAutoLogin(
     // Give the gateway a moment to process
     await sleep(3000);
 
-    // Check the page content for success indicators
-    const pageContent = await page.content();
+    // Check the visible page text (not full HTML — hidden 2FA forms are always in the DOM)
+    const visibleText = await page.evaluate(() => document.body.innerText || '');
     const pageUrl = page.url();
 
-    if (pageContent.includes('Client login succeeds')) {
+    console.log(`[IB-AUTO-LOGIN] Post-login URL: ${pageUrl}`);
+    console.log(`[IB-AUTO-LOGIN] Visible text (first 200 chars): ${visibleText.substring(0, 200)}`);
+
+    if (visibleText.includes('Client login succeeds')) {
       const duration = Date.now() - startTime;
       console.log(`[IB-AUTO-LOGIN] Login successful (${duration}ms)`);
       return { success: true, message: 'Auto-login successful', duration };
     }
 
-    // Check if we hit 2FA — paper accounts typically don't have 2FA,
-    // but if they do, we can't automate it
-    if (pageContent.includes('Second Factor') || pageContent.includes('security code') || pageContent.includes('notification')) {
+    // Check auth status via the gateway API — this is the most reliable check
+    // The page may redirect or render differently but the API tells the truth
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const statusPage = await browser.newPage();
+        await statusPage.goto(`${gatewayUrl}/v1/api/iserver/auth/status`, {
+          waitUntil: 'networkidle2',
+          timeout: 10_000,
+        });
+        const statusText = await statusPage.evaluate(() => document.body.textContent || '');
+        await statusPage.close();
+        console.log(`[IB-AUTO-LOGIN] Auth status check ${attempt + 1}: ${statusText.substring(0, 200)}`);
+        if (statusText.includes('"authenticated":true')) {
+          const duration = Date.now() - startTime;
+          console.log(`[IB-AUTO-LOGIN] Login verified via auth status (${duration}ms)`);
+          return { success: true, message: 'Auto-login successful (verified via status)', duration };
+        }
+      } catch { /* ignore status check failure */ }
+      if (attempt < 2) await sleep(2000);
+    }
+
+    // Check if 2FA is actually being prompted (visible on screen, not hidden in DOM)
+    if (visibleText.includes('Second Factor') || visibleText.includes('security code') || visibleText.includes('Enter the challenge code')) {
       console.warn('[IB-AUTO-LOGIN] 2FA required — cannot automate this step');
       return { success: false, message: 'Login succeeded but 2FA is required — cannot automate' };
     }
 
-    // Check if the login form is still showing (bad credentials)
-    if (pageContent.includes('placeholder="Username"') && pageUrl.includes('Dispatcher')) {
+    // Check if login form is still showing (bad credentials or timeout)
+    if (visibleText.includes('Username') && visibleText.includes('Password') && visibleText.includes('Login')) {
       console.error('[IB-AUTO-LOGIN] Login failed — credentials may be incorrect');
       return { success: false, message: 'Login failed — check username/password' };
     }
-
-    // Unknown state — might still be loading
-    // Try checking auth status via the API as a final verification
-    try {
-      const statusPage = await browser.newPage();
-      await statusPage.goto(`${gatewayUrl}/v1/api/iserver/auth/status`, {
-        waitUntil: 'networkidle2',
-        timeout: 10_000,
-      });
-      const statusText = await statusPage.evaluate(() => document.body.textContent || '');
-      if (statusText.includes('"authenticated":true')) {
-        const duration = Date.now() - startTime;
-        console.log(`[IB-AUTO-LOGIN] Login verified via auth status (${duration}ms)`);
-        return { success: true, message: 'Auto-login successful (verified via status)', duration };
-      }
-    } catch { /* ignore status check failure */ }
 
     console.warn(`[IB-AUTO-LOGIN] Login result unclear — page URL: ${pageUrl}`);
     return { success: false, message: `Login result unclear — ended at ${pageUrl}` };
